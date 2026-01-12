@@ -113,6 +113,32 @@ return [
             // 'trust_server_certificate' => env('DB_TRUST_SERVER_CERTIFICATE', 'false'),
         ],
 
+        'meditop' => [
+            'driver' => env('MEDITOP_DB_DRIVER', 'mysql'),
+            'url' => env('MEDITOP_DB_URL'),
+            'host' => env('MEDITOP_DB_HOST', '127.0.0.1'),
+            'port' => env('MEDITOP_DB_PORT', '3306'),
+            'database' => env('MEDITOP_DB_DATABASE', 'Meditop'),
+            'username' => env('MEDITOP_DB_USERNAME', 'root'),
+            'password' => env('MEDITOP_DB_PASSWORD', ''),
+            'charset' => env('MEDITOP_DB_CHARSET', 'utf8'),
+            'prefix' => '',
+            'prefix_indexes' => true,
+        ],
+
+        'archive' => [
+            'driver' => env('ARCHIVE_DB_DRIVER', 'mysql'),
+            'url' => env('ARCHIVE_DB_URL'),
+            'host' => env('ARCHIVE_DB_HOST', '127.0.0.1'),
+            'port' => env('ARCHIVE_DB_PORT', '3306'),
+            'database' => env('ARCHIVE_DB_DATABASE', 'Archive'),
+            'username' => env('ARCHIVE_DB_USERNAME', 'root'),
+            'password' => env('ARCHIVE_DB_PASSWORD', ''),
+            'charset' => env('ARCHIVE_DB_CHARSET', 'utf8'),
+            'prefix' => '',
+            'prefix_indexes' => true,
+        ],
+
     ],
 
     /*
