@@ -14,4 +14,5 @@ Route::middleware([AuthenticateDoctor::class])->group(function () {
     Route::get('doctor/admissions/{id}', [AdmissionController::class, 'show']);
     Route::post('doctor/admissions/{id}/form', [AdmissionController::class, 'saveForm']);
     Route::post('doctor/admissions/{id}/attachments', [AdmissionController::class, 'uploadAttachment']);
+    Route::delete('doctor/admissions/{id}/attachments/{attachmentId}', [AdmissionController::class, 'deleteAttachment']);
 });

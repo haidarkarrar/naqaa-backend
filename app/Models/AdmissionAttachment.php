@@ -9,7 +9,7 @@ class AdmissionAttachment extends Model
 {
     protected $connection = 'archive';
     protected $table = 'TblAdmissionAttachments';
-    protected $primaryKey = 'Id';
+    protected $primaryKey = 'id';
     public $timestamps = false;
 
     protected $casts = [

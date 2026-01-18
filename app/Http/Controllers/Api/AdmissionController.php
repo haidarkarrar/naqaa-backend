@@ -65,7 +65,18 @@ class AdmissionController extends Controller
                 'status' => $record->Posted ? 'closed' : 'open',
             ]);
 
-        $attachments = $admission->attachments()->orderBy('uploaded_at', 'desc')->get();
+        $attachments = $admission->attachments()
+            ->orderBy('uploaded_at', 'desc')
+            ->get()
+            ->map(function (AdmissionAttachment $attachment) {
+                return [
+                    'id' => $attachment->getKey(),
+                    'path' => $attachment->path,
+                    'url' => Storage::disk('public')->url($attachment->path),
+                    'label' => $attachment->label,
+                    'uploaded_at' => optional($attachment->uploaded_at)->toDateTimeString(),
+                ];
+            });
 
         return response()->json([
             'admission' => $admission,
@@ -126,8 +137,42 @@ class AdmissionController extends Controller
             'uploaded_at' => now(),
         ]);
 
+        $attachmentData = [
+            'id' => $attachment->getKey(),
+            'path' => $attachment->path,
+            'url' => Storage::disk('public')->url($attachment->path),
+            'label' => $attachment->label,
+            'uploaded_at' => optional($attachment->uploaded_at)->toDateTimeString(),
+        ];
+
         return response()->json([
-            'attachment' => $attachment,
+            'attachment' => $attachmentData,
         ]);
+    }
+
+    public function deleteAttachment(int $id, int $attachmentId, Request $request): JsonResponse
+    {
+        /** @var \App\Models\Doctor $doctor */
+        $doctor = $request->user();
+
+        $admission = AdmissionFile::findOrFail($id);
+
+        if ($admission->DoctorId !== $doctor->Id) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $attachment = AdmissionAttachment::findOrFail($attachmentId);
+
+        if ($attachment->admission_id !== $admission->Id) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        if (Storage::disk('public')->exists($attachment->path)) {
+            Storage::disk('public')->delete($attachment->path);
+        }
+
+        $attachment->delete();
+
+        return response()->json(['message' => 'Deleted']);
     }
 }
