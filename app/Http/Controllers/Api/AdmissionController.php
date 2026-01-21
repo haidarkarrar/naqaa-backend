@@ -11,9 +11,14 @@ use App\Models\DigitalAdmissionForm;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class AdmissionController extends Controller
 {
+    private const DEFAULT_PEN_COLOR = '#38bdf8';
+    private const DEFAULT_PEN_WIDTH = 3;
+    private const DEFAULT_ERASER_WIDTH = 48;
+
     public function index(Request $request): JsonResponse
     {
         /** @var \App\Models\Doctor $doctor */
@@ -106,7 +111,54 @@ class AdmissionController extends Controller
         // Set attributes explicitly
         $form->DoctorId = $doctor->Id;
         $form->Payload = $request->Payload;
-        $form->Strokes = $request->Strokes ?? [];
+        $sanitizedStrokes = collect($request->Strokes ?? [])
+            ->map(function ($stroke) {
+                $points = collect($stroke['points'] ?? [])
+                    ->map(function ($point) {
+                        $x = $point['x'] ?? null;
+                        $y = $point['y'] ?? null;
+
+                        if (!is_numeric($x) || !is_numeric($y)) {
+                            return null;
+                        }
+
+                        return [
+                            'x' => (float) $x,
+                            'y' => (float) $y,
+                            'timestamp' => isset($point['timestamp']) && is_numeric($point['timestamp'])
+                                ? (int) $point['timestamp']
+                                : now()->valueOf(),
+                        ];
+                    })
+                    ->filter()
+                    ->values();
+
+                if ($points->isEmpty()) {
+                    return null;
+                }
+
+                $tool = isset($stroke['tool']) && in_array($stroke['tool'], ['pen', 'eraser'], true)
+                    ? $stroke['tool']
+                    : 'pen';
+
+                return [
+                    'id' => isset($stroke['id']) && is_string($stroke['id'])
+                        ? $stroke['id']
+                        : Str::uuid()->toString(),
+                    'tool' => $tool,
+                    'width' => isset($stroke['width']) && is_numeric($stroke['width'])
+                        ? (float) $stroke['width']
+                        : ($tool === 'eraser' ? self::DEFAULT_ERASER_WIDTH : self::DEFAULT_PEN_WIDTH),
+                    'color' => isset($stroke['color']) && is_string($stroke['color'])
+                        ? $stroke['color']
+                        : self::DEFAULT_PEN_COLOR,
+                    'points' => $points->all(),
+                ];
+            })
+            ->filter()
+            ->values()
+            ->all();
+        $form->Strokes = $sanitizedStrokes;
         $form->FormVersion = $request->FormVersion ?? 'v1';
         $form->Status = $request->Status ?? 'draft';
         
