@@ -12,7 +12,6 @@ class AdmissionFile extends Model
     protected $connection = 'meditop';
     protected $table = 'TblAdmFiles';
     protected $primaryKey = 'Id';
-    public $timestamps = false;
 
     protected $casts = [
         'AdmDate' => 'datetime',
@@ -30,12 +29,16 @@ class AdmissionFile extends Model
 
     public function digitalForm(): HasOne
     {
-        return $this->hasOne(DigitalAdmissionForm::class, 'admission_id', 'Id');
+        return $this->hasOne(
+            DigitalAdmissionForm::class,
+            'AdmissionId',
+            'Id'
+        );
     }
 
     public function attachments(): HasMany
     {
-        return $this->hasMany(AdmissionAttachment::class, 'admission_id', 'Id');
+        return $this->hasMany(AdmissionAttachment::class, 'AdmissionId', 'Id');
     }
 
 }

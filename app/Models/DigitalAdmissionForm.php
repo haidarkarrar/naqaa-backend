@@ -11,27 +11,27 @@ class DigitalAdmissionForm extends Model
     protected $table = 'TblDigitalAdmissionForms';
     protected $primaryKey = 'Id';
 
-    protected $casts = [
-        'payload' => 'array',
-        'strokes' => 'array',
+    protected $fillable = [
+        'DoctorId',
+        'AdmissionId',
+        'Payload',
+        'Strokes',
+        'FormVersion',
+        'Status',
     ];
 
-    protected $fillable = [
-        'doctor_id',
-        'admission_id',
-        'payload',
-        'strokes',
-        'form_version',
-        'status',
+    protected $casts = [
+        'Payload' => 'array',
+        'Strokes' => 'array',
     ];
 
     public function admission(): BelongsTo
     {
-        return $this->belongsTo(AdmissionFile::class, 'admission_id', 'Id');
+        return $this->belongsTo(AdmissionFile::class, 'AdmissionId', 'Id');
     }
 
     public function doctor(): BelongsTo
     {
-        return $this->belongsTo(Doctor::class, 'doctor_id', 'Id');
+        return $this->belongsTo(Doctor::class, 'DoctorId', 'Id');
     }
 }

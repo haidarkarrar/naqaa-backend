@@ -9,13 +9,13 @@ return new class extends Migration
     public function up(): void
     {
         Schema::connection('meditop')->create('TblDigitalAdmissionForms', function (Blueprint $table) {
-            $table->id();
-            $table->unsignedBigInteger('doctor_id');
-            $table->unsignedBigInteger('admission_id');
-            $table->json('payload')->nullable();
-            $table->json('strokes')->nullable();
-            $table->string('form_version')->nullable();
-            $table->string('status', 32)->default('draft');
+            $table->integer('Id')->primary();
+            $table->unsignedBigInteger('DoctorId');
+            $table->unsignedBigInteger('AdmissionId');
+            $table->json('Payload')->nullable();
+            $table->json('Strokes')->nullable();
+            $table->string('FormVersion')->nullable();
+            $table->string('Status', 32)->default('draft');
             $table->timestamps();
         });
     }

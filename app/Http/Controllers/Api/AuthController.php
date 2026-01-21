@@ -26,25 +26,25 @@ class AuthController extends Controller
         $plain = Str::random(60);
 
         $token = $doctor->tokens()->create([
-            'name' => 'mobile',
-            'token' => $plain,
-            'expires_at' => now()->addHours(12),
+            'Name' => 'mobile',
+            'Token' => $plain,
+            'ExpiresAt' => now()->addHours(12),
         ]);
 
         return response()->json([
-            'token' => $plain,
+            'Token' => $plain,
             'doctor' => [
                 'id' => $doctor->Id,
-                'email' => $doctor->Email,
-                'full_name' => $doctor->FullName ?? trim("{$doctor->FirstName} {$doctor->LastName}"),
-                'specialty_id' => $doctor->SpecialtyId,
+                'Email' => $doctor->Email,
+                'FullName' => $doctor->FullName ?? trim("{$doctor->FirstName} {$doctor->LastName}"),
+                'SpecialtyId' => $doctor->SpecialtyId,
             ],
         ]);
     }
 
     public function logout(Request $request): JsonResponse
     {
-        $token = $request->attributes->get('doctor_token');
+        $token = $request->attributes->get('DoctorToken');
 
         if ($token) {
             $token->delete();

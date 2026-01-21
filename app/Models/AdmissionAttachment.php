@@ -9,24 +9,23 @@ class AdmissionAttachment extends Model
 {
     protected $connection = 'archive';
     protected $table = 'TblAdmissionAttachments';
-    protected $primaryKey = 'id';
-    public $timestamps = false;
+    protected $primaryKey = 'Id';
 
     protected $casts = [
-        'uploaded_at' => 'datetime',
+        'UploadedAt' => 'datetime',
     ];
 
     protected $fillable = [
-        'doctor_id',
-        'admission_id',
-        'path',
-        'mime',
-        'label',
-        'uploaded_at',
+        'DoctorId',
+        'AdmissionId',
+        'Path',
+        'Mime',
+        'Label',
+        'UploadedAt',
     ];
 
     public function admission(): BelongsTo
     {
-        return $this->belongsTo(AdmissionFile::class, 'admission_id', 'Id');
+        return $this->belongsTo(AdmissionFile::class, 'AdmissionId', 'Id');
     }
 }

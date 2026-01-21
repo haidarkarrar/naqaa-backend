@@ -23,10 +23,10 @@ class AuthenticateDoctor
             return new JsonResponse(['message' => 'Unauthenticated.'], 401);
         }
 
-        $token->update(['last_used_at' => now()]);
+        $token->update(['LastUsedAt' => now()]);
 
         $request->setUserResolver(fn () => $token->doctor);
-        $request->attributes->set('doctor_token', $token);
+        $request->attributes->set('DoctorToken', $token);
 
         return $next($request);
     }

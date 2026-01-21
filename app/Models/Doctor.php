@@ -14,8 +14,7 @@ class Doctor extends Model
     protected $connection = 'meditop';
     protected $table = 'TblDoctors';
     protected $primaryKey = 'Id';
-    public $timestamps = false;
-
+    
     protected $fillable = [
         'FirstName',
         'MiddleName',
@@ -45,6 +44,6 @@ class Doctor extends Model
 
     public function tokens(): HasMany
     {
-        return $this->hasMany(DoctorApiToken::class, 'doctor_id');
+        return $this->hasMany(DoctorApiToken::class, 'DoctorId');
     }
 }

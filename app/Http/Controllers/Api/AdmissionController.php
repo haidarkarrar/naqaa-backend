@@ -31,9 +31,9 @@ class AdmissionController extends Controller
             ->map(function (AdmissionFile $admission) {
                 return [
                     'id' => $admission->Id,
-                    'patient' => "{$admission->patient?->First} {$admission->patient?->Last}",
-                    'date' => optional($admission->AdmDate)->toDateTimeString(),
-                    'status' => $admission->Posted ? 'closed' : 'open',
+                    'Patient' => "{$admission->Patient?->First} {$admission->Patient?->Last}",
+                    'AdmDate' => optional($admission->AdmDate)->toDateTimeString(),
+                    'Status' => $admission->Posted ? 'closed' : 'open',
                 ];
             });
 
@@ -47,7 +47,7 @@ class AdmissionController extends Controller
         /** @var \App\Models\Doctor $doctor */
         $doctor = $request->user();
 
-        $admission = AdmissionFile::with(['patient', 'digitalForm'])
+        $admission = AdmissionFile::with(['Patient', 'DigitalForm'])
             ->findOrFail($id);
 
         if ($admission->DoctorId !== $doctor->Id) {
@@ -61,29 +61,29 @@ class AdmissionController extends Controller
             ->get()
             ->map(fn (AdmissionFile $record) => [
                 'id' => $record->Id,
-                'date' => optional($record->AdmDate)->toDateTimeString(),
-                'status' => $record->Posted ? 'closed' : 'open',
+                'AdmDate' => optional($record->AdmDate)->toDateTimeString(),
+                'Status' => $record->Posted ? 'closed' : 'open',
             ]);
 
         $attachments = $admission->attachments()
-            ->orderBy('uploaded_at', 'desc')
+            ->orderBy('UploadedAt', 'desc')
             ->get()
             ->map(function (AdmissionAttachment $attachment) {
                 return [
                     'id' => $attachment->getKey(),
-                    'path' => $attachment->path,
-                    'url' => Storage::disk('public')->url($attachment->path),
-                    'label' => $attachment->label,
-                    'uploaded_at' => optional($attachment->uploaded_at)->toDateTimeString(),
+                    'Path' => $attachment->Path,
+                    'Url' => Storage::url($attachment->Path),
+                    'Label' => $attachment->Label,
+                    'UploadedAt' => optional($attachment->UploadedAt)->toDateTimeString(),
                 ];
             });
 
         return response()->json([
-            'admission' => $admission,
-            'patient' => $admission->patient,
-            'history' => $history,
-            'digital_form' => $admission->digitalForm,
-            'attachments' => $attachments,
+            'Admission' => $admission,
+            'Patient' => $admission->Patient,
+            'History' => $history,
+            'DigitalForm' => $admission->DigitalForm,
+            'Attachments' => $attachments,
         ]);
     }
 
@@ -91,26 +91,30 @@ class AdmissionController extends Controller
     {
         /** @var \App\Models\Doctor $doctor */
         $doctor = $request->user();
-
+    
+        // Fetch the admission
         $admission = AdmissionFile::findOrFail($id);
-
+    
+        // Check if the logged-in doctor owns this admission
         if ($admission->DoctorId !== $doctor->Id) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
-
-        $form = DigitalAdmissionForm::updateOrCreate(
-            ['admission_id' => $admission->Id],
-            [
-                'doctor_id' => $doctor->Id,
-                'payload' => $request->payload,
-                'strokes' => $request->strokes ?? [],
-                'form_version' => $request->form_version ?? 'v1',
-                'status' => $request->status ?? 'draft',
-            ]
-        );
-
+    
+        // Find or create the form
+        $form = DigitalAdmissionForm::firstOrNew(['AdmissionId' => $admission->Id]);
+        
+        // Set attributes explicitly
+        $form->DoctorId = $doctor->Id;
+        $form->Payload = $request->Payload;
+        $form->Strokes = $request->Strokes ?? [];
+        $form->FormVersion = $request->FormVersion ?? 'v1';
+        $form->Status = $request->Status ?? 'draft';
+        
+        // Force save
+        $form->save();
+    
         return response()->json([
-            'form' => $form,
+            'Form' => $form->fresh(), // Refresh to get the actual saved data
         ]);
     }
 
@@ -125,28 +129,28 @@ class AdmissionController extends Controller
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        $file = $request->file('file');
-        $path = Storage::disk('public')->putFile('admissions', $file);
+        $file = $request->file('File');
+        $Path = Storage::disk('public')->putFile('admissions', $file);
 
         $attachment = AdmissionAttachment::create([
-            'doctor_id' => $doctor->Id,
-            'admission_id' => $admission->Id,
-            'path' => $path,
-            'mime' => $file->getClientMimeType(),
-            'label' => $request->label,
-            'uploaded_at' => now(),
+            'DoctorId' => $doctor->Id,
+            'AdmissionId' => $admission->Id,
+            'Path' => $Path,
+            'Mime' => $file->getClientMimeType(),
+            'Label' => $request->Label,
+            'UploadedAt' => now(),
         ]);
 
         $attachmentData = [
             'id' => $attachment->getKey(),
-            'path' => $attachment->path,
-            'url' => Storage::disk('public')->url($attachment->path),
-            'label' => $attachment->label,
-            'uploaded_at' => optional($attachment->uploaded_at)->toDateTimeString(),
+            'Path' => $attachment->Path,
+            'Url' => Storage::url($attachment->Path),
+            'Label' => $attachment->Label,
+            'UploadedAt' => optional($attachment->UploadedAt)->toDateTimeString(),
         ];
 
         return response()->json([
-            'attachment' => $attachmentData,
+            'Attachment' => $attachmentData,
         ]);
     }
 
@@ -163,12 +167,12 @@ class AdmissionController extends Controller
 
         $attachment = AdmissionAttachment::findOrFail($attachmentId);
 
-        if ($attachment->admission_id !== $admission->Id) {
+        if ($attachment->AdmissionId !== $admission->Id) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        if (Storage::disk('public')->exists($attachment->path)) {
-            Storage::disk('public')->delete($attachment->path);
+        if (Storage::disk('public')->exists($attachment->Path)) {
+            Storage::disk('public')->delete($attachment->Path);
         }
 
         $attachment->delete();

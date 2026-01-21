@@ -37,3 +37,5 @@
 - Controllers always verify `DoctorId` ownership before mutating data.
 
 This file is meant to help Cursor shoppers understand the backend responsibilities and how the API connects to the doctor-facing app.
+
+### php artisan serve --host=0.0.0.0 --port=8000

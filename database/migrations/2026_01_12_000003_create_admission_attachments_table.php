@@ -9,13 +9,14 @@ return new class extends Migration
     public function up(): void
     {
         Schema::connection('archive')->create('TblAdmissionAttachments', function (Blueprint $table) {
-            $table->id();
-            $table->unsignedBigInteger('doctor_id')->nullable();
-            $table->unsignedBigInteger('admission_id');
-            $table->string('path');
-            $table->string('mime');
-            $table->string('label')->nullable();
-            $table->timestamp('uploaded_at')->useCurrent();
+            $table->integer('Id')->primary();
+            $table->unsignedBigInteger('DoctorId')->nullable();
+            $table->unsignedBigInteger('AdmissionId');
+            $table->string('Path');
+            $table->string('Mime');
+            $table->string('Label')->nullable();
+            $table->timestamp('UploadedAt')->useCurrent();
+            $table->timestamps();
         });
     }
 

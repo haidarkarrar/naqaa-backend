@@ -9,44 +9,45 @@ class DoctorApiToken extends Model
 {
     protected $connection = 'meditop';
     protected $table = 'doctor_api_tokens';
+    protected $primaryKey = 'Id';
 
     protected $fillable = [
-        'doctor_id',
-        'name',
-        'token',
-        'abilities',
-        'expires_at',
-        'last_used_at',
+        'DoctorId',
+        'Name',
+        'Token',
+        'Abilities',
+        'ExpiresAt',
+        'LastUsedAt',
     ];
 
     protected $hidden = [
-        'token',
+        'Token',
     ];
 
     protected $casts = [
-        'abilities' => 'array',
-        'expires_at' => 'datetime',
-        'last_used_at' => 'datetime',
+        'Abilities' => 'array',
+        'ExpiresAt' => 'datetime',
+        'LastUsedAt' => 'datetime',
     ];
 
     public function doctor(): BelongsTo
     {
-        return $this->belongsTo(Doctor::class, 'doctor_id', 'Id');
+        return $this->belongsTo(Doctor::class, 'DoctorId', 'Id');
     }
 
     public static function findForToken(string $token): ?self
     {
         $hashed = hash('sha256', $token);
 
-        return static::where('token', $hashed)
+        return static::where('Token', $hashed)
             ->where(function ($query) {
-                $query->whereNull('expires_at')->orWhere('expires_at', '>=', now());
+                $query->whereNull('ExpiresAt')->orWhere('ExpiresAt', '>=', now());
             })
             ->first();
     }
 
     public function setTokenAttribute(string $value): void
     {
-        $this->attributes['token'] = hash('sha256', $value);
+        $this->attributes['Token'] = hash('sha256', $value);
     }
 }

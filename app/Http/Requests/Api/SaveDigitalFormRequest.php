@@ -14,10 +14,10 @@ class SaveDigitalFormRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'payload' => ['required', 'array'],
-            'strokes' => ['sometimes', 'array'],
-            'form_version' => ['sometimes', 'string'],
-            'status' => ['sometimes', 'string'],
+            'Payload' => ['required', 'array'],
+            'Strokes' => ['sometimes', 'array'],
+            'FormVersion' => ['sometimes', 'string'],
+            'Status' => ['sometimes', 'string'],
         ];
     }
 }

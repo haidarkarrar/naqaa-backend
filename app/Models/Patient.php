@@ -10,8 +10,7 @@ class Patient extends Model
     protected $connection = 'meditop';
     protected $table = 'TblPatients';
     protected $primaryKey = 'Id';
-    public $timestamps = false;
-
+    
     protected $fillable = [
         'First',
         'Middle',
@@ -36,6 +35,10 @@ class Patient extends Model
         'MaritalStatusId',
         'OFD',
         'MainDoctorId',
+        'Smoker',
+        'Alcoholic',
+        'MedicalHistory',
+        'SurgicalHistory',
     ];
 
     public function admissions(): HasMany
