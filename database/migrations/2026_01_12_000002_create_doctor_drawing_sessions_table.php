@@ -9,7 +9,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::connection('meditop')->create('TblDoctorDrawingSessions', function (Blueprint $table) {
-            $table->integer('Id')->primary();
+            $table->increments('Id');
             $table->unsignedBigInteger('DoctorId');
             $table->unsignedBigInteger('AdmissionId');
             $table->json('StrokeData');

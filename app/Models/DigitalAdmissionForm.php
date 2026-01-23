@@ -11,6 +11,9 @@ class DigitalAdmissionForm extends Model
     protected $table = 'TblDigitalAdmissionForms';
     protected $primaryKey = 'Id';
 
+    public $incrementing = true;
+    protected $keyType = 'int';
+
     protected $fillable = [
         'DoctorId',
         'AdmissionId',

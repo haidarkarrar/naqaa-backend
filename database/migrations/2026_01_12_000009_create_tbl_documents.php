@@ -9,7 +9,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::connection('archive')->create('TblDocuments', function (Blueprint $table) {
-            $table->integer('Id')->primary();
+            $table->increments('Id');
             $table->unsignedInteger('MRN')->nullable();
             $table->dateTime('Date')->nullable();
             $table->binary('Tump')->nullable();

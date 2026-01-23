@@ -9,7 +9,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::connection('meditop')->create('doctor_api_tokens', function (Blueprint $table) {
-            $table->integer('Id')->primary();
+            $table->increments('Id');
             $table->unsignedBigInteger('DoctorId');
             $table->string('Name')->default('mobile');
             $table->string('Token', 64)->unique();

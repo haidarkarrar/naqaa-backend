@@ -9,7 +9,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::connection('meditop')->create('TblGuarantors', function (Blueprint $table) {
-            $table->integer('Id')->primary();
+            $table->increments('Id');
             $table->integer('GroupId')->nullable();
             $table->string('Name', 150)->nullable();
             $table->integer('SerialId')->nullable();

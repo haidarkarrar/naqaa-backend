@@ -9,7 +9,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::connection('archive')->create('TblAdmissionAttachments', function (Blueprint $table) {
-            $table->integer('Id')->primary();
+            $table->increments('Id');
             $table->unsignedBigInteger('DoctorId')->nullable();
             $table->unsignedBigInteger('AdmissionId');
             $table->string('Path');
