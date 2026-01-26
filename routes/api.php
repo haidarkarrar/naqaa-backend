@@ -6,6 +6,7 @@ use App\Http\Middleware\AuthenticateDoctor;
 use Illuminate\Support\Facades\Route;
 
 Route::post('doctor/login', [AuthController::class, 'login']);
+Route::post('doctor/refresh', [AuthController::class, 'refresh']);
 
 Route::middleware([AuthenticateDoctor::class])->group(function () {
     Route::post('doctor/logout', [AuthController::class, 'logout']);
