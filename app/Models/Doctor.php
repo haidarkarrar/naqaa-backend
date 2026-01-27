@@ -46,4 +46,9 @@ class Doctor extends Model
     {
         return $this->hasMany(DoctorApiToken::class, 'DoctorId');
     }
+
+    public function refreshTokens(): HasMany
+    {
+        return $this->hasMany(DoctorRefreshToken::class, 'DoctorId');
+    }
 }
