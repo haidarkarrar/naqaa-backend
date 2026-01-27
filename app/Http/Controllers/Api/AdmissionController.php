@@ -10,6 +10,7 @@ use App\Models\AdmissionFile;
 use App\Models\DigitalAdmissionForm;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -61,6 +62,7 @@ class AdmissionController extends Controller
 
         $history = AdmissionFile::query()
             ->where('PatientId', $admission->PatientId)
+            ->where('DoctorId', $doctor->Id)
             ->orderBy('AdmDate', 'desc')
             ->limit(5)
             ->get()
@@ -181,29 +183,54 @@ class AdmissionController extends Controller
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        $file = $request->file('File');
-        $Path = Storage::disk('public')->putFile('admissions', $file);
-
-        $attachment = AdmissionAttachment::create([
-            'DoctorId' => $doctor->Id,
-            'AdmissionId' => $admission->Id,
-            'Path' => $Path,
-            'Mime' => $file->getClientMimeType(),
-            'Label' => $request->Label,
-            'UploadedAt' => now(),
+        Log::info('Admission attachment upload requested', [
+            'doctor_id' => $doctor->Id,
+            'admission_id' => $admission->Id,
+            'has_file' => $request->hasFile('File'),
         ]);
 
-        $attachmentData = [
-            'id' => $attachment->getKey(),
-            'Path' => $attachment->Path,
-            'Url' => Storage::url($attachment->Path),
-            'Label' => $attachment->Label,
-            'UploadedAt' => optional($attachment->UploadedAt)->toDateTimeString(),
-        ];
+        try {
+            $file = $request->file('File');
+            $Path = Storage::disk('public')->putFile('admissions', $file);
 
-        return response()->json([
-            'Attachment' => $attachmentData,
-        ]);
+            $attachment = AdmissionAttachment::create([
+                'DoctorId' => $doctor->Id,
+                'AdmissionId' => $admission->Id,
+                'Path' => $Path,
+                'Mime' => $file->getClientMimeType(),
+                'Label' => $request->Label,
+                'UploadedAt' => now(),
+            ]);
+
+            $attachmentData = [
+                'id' => $attachment->getKey(),
+                'Path' => $attachment->Path,
+                'Url' => Storage::url($attachment->Path),
+                'Label' => $attachment->Label,
+                'UploadedAt' => optional($attachment->UploadedAt)->toDateTimeString(),
+            ];
+
+            Log::info('Admission attachment uploaded', [
+                'attachment_id' => $attachment->getKey(),
+                'doctor_id' => $doctor->Id,
+                'admission_id' => $admission->Id,
+                'path' => $attachment->Path,
+            ]);
+
+            return response()->json([
+                'Attachment' => $attachmentData,
+            ]);
+        } catch (\Throwable $error) {
+            Log::error('Admission attachment upload failed', [
+                'doctor_id' => $doctor->Id,
+                'admission_id' => $admission->Id,
+                'error' => $error->getMessage(),
+                'trace' => $error->getTraceAsString(),
+            ]);
+
+            return response()->json(['message' => 'Unable to upload attachment'], 500);
+        }
+
     }
 
     public function deleteAttachment(int $id, int $attachmentId, Request $request): JsonResponse

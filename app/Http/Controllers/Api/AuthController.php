@@ -28,7 +28,7 @@ class AuthController extends Controller
         $token = $doctor->tokens()->create([
             'Name' => 'mobile',
             'Token' => $plain,
-            'ExpiresAt' => now()->addHours(12),
+            'ExpiresAt' => now()->addDay(),
         ]);
 
         return response()->json([
