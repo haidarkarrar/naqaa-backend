@@ -82,13 +82,40 @@ class AuthController extends Controller
             }
 
             if ($refreshToken->RevokedAt) {
-                $refreshToken->doctor?->refreshTokens()
-                    ->whereNull('RevokedAt')
-                    ->update([
-                        'RevokedAt' => now(),
-                        'UpdatedAt' => now(),
-                    ]);
+                if ($refreshToken->DoctorId) {
+                    DoctorRefreshToken::where('DoctorId', $refreshToken->DoctorId)
+                        ->where('DeviceId', $deviceId)
+                        ->whereNull('RevokedAt')
+                        ->update([
+                            'RevokedAt' => now(),
+                            'UpdatedAt' => now(),
+                        ]);
+                }
 
+                DB::commit();
+
+                return new JsonResponse(['message' => 'Unauthenticated.'], 401);
+            }
+
+            if ($refreshToken->ExpiresAt && $refreshToken->ExpiresAt->isPast()) {
+                if ($refreshToken->DoctorId) {
+                    DoctorRefreshToken::where('DoctorId', $refreshToken->DoctorId)
+                        ->where('DeviceId', $deviceId)
+                        ->whereNull('RevokedAt')
+                        ->update([
+                            'RevokedAt' => now(),
+                            'UpdatedAt' => now(),
+                        ]);
+                }
+
+                DB::commit();
+
+                return new JsonResponse(['message' => 'Unauthenticated.'], 401);
+            }
+
+            $doctor = $refreshToken->doctor;
+
+            if (!$doctor) {
                 DB::rollBack();
 
                 return new JsonResponse(['message' => 'Unauthenticated.'], 401);
@@ -99,14 +126,6 @@ class AuthController extends Controller
                 'UpdatedAt' => now(),
                 'LastUsedAt' => now(),
             ]);
-
-            $doctor = $refreshToken->doctor;
-
-            if (!$doctor) {
-                DB::rollBack();
-
-                return new JsonResponse(['message' => 'Unauthenticated.'], 401);
-            }
 
             $plain = Str::random(60);
             $doctor->tokens()->create([
