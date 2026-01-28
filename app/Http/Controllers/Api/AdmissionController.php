@@ -56,20 +56,17 @@ class AdmissionController extends Controller
         $admission = AdmissionFile::with(['Patient', 'DigitalForm'])
             ->findOrFail($id);
 
-        if ($admission->DoctorId !== $doctor->Id) {
-            return response()->json(['message' => 'Forbidden'], 403);
-        }
-
-        $history = AdmissionFile::query()
+        $history = AdmissionFile::with('doctor')
             ->where('PatientId', $admission->PatientId)
-            ->where('DoctorId', $doctor->Id)
             ->orderBy('AdmDate', 'desc')
             ->limit(5)
             ->get()
             ->map(fn (AdmissionFile $record) => [
                 'id' => $record->Id,
-                'AdmDate' => optional($record->AdmDate)->toDateTimeString(),
-                'Status' => $record->Posted ? 'closed' : 'open',
+                'admDate' => optional($record->AdmDate)->toDateTimeString(),
+                'status' => $record->Posted ? 'closed' : 'open',
+                'doctorId' => $record->DoctorId,
+                'doctorName' => optional($record->doctor)->FullName,
             ]);
 
         $attachments = $admission->attachments()
@@ -105,6 +102,10 @@ class AdmissionController extends Controller
         // Check if the logged-in doctor owns this admission
         if ($admission->DoctorId !== $doctor->Id) {
             return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        if ($admission->Posted) {
+            return response()->json(['message' => 'Admission is closed'], 403);
         }
     
         // Find or create the form
@@ -183,6 +184,10 @@ class AdmissionController extends Controller
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
+        if ($admission->Posted) {
+            return response()->json(['message' => 'Admission is closed'], 403);
+        }
+
         Log::info('Admission attachment upload requested', [
             'doctor_id' => $doctor->Id,
             'admission_id' => $admission->Id,
@@ -242,6 +247,10 @@ class AdmissionController extends Controller
 
         if ($admission->DoctorId !== $doctor->Id) {
             return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        if ($admission->Posted) {
+            return response()->json(['message' => 'Admission is closed'], 403);
         }
 
         $attachment = AdmissionAttachment::findOrFail($attachmentId);
