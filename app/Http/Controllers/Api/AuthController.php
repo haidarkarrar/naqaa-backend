@@ -31,7 +31,7 @@ class AuthController extends Controller
         $doctor->tokens()->create([
             'Name' => 'mobile',
             'Token' => $plain,
-            'ExpiresAt' => now()->addDay(),
+            'ExpiresAt' => now()->addMinutes(5),
         ]);
 
         $deviceId = Str::uuid()->toString();

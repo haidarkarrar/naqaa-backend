@@ -30,7 +30,7 @@ class AdmissionController extends Controller
             ->where('DoctorId', $doctor->Id)
             ->when($request->query('start_date'), fn ($query, $value) => $query->where('AdmDate', '>=', $value))
             ->when($request->query('end_date'), fn ($query, $value) => $query->where('AdmDate', '<=', $value))
-            ->when($request->query('status'), fn ($query, $value) => $query->where('Posted', $value === 'closed' ? 1 : 0))
+            ->when($request->query('status'), fn ($query, $value) => $query->where('Closed', $value === 'closed' ? 1 : 0))
             ->orderBy('AdmDate', 'desc')
             ->limit(80)
             ->get()
@@ -39,7 +39,7 @@ class AdmissionController extends Controller
                     'id' => $admission->Id,
                     'Patient' => "{$admission->Patient?->First} {$admission->Patient?->Last}",
                     'AdmDate' => optional($admission->AdmDate)->toDateTimeString(),
-                    'Status' => $admission->Posted ? 'closed' : 'open',
+                    'Status' => $admission->Closed ? 'closed' : 'open',
                 ];
             });
 
@@ -64,7 +64,7 @@ class AdmissionController extends Controller
             ->map(fn (AdmissionFile $record) => [
                 'id' => $record->Id,
                 'admDate' => optional($record->AdmDate)->toDateTimeString(),
-                'status' => $record->Posted ? 'closed' : 'open',
+                'status' => $record->Closed ? 'closed' : 'open',
                 'doctorId' => $record->DoctorId,
                 'doctorName' => optional($record->doctor)->FullName,
             ]);
@@ -104,7 +104,7 @@ class AdmissionController extends Controller
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        if ($admission->Posted) {
+        if ($admission->Closed) {
             return response()->json(['message' => 'Admission is closed'], 403);
         }
     
@@ -184,7 +184,7 @@ class AdmissionController extends Controller
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        if ($admission->Posted) {
+        if ($admission->Closed) {
             return response()->json(['message' => 'Admission is closed'], 403);
         }
 
@@ -249,7 +249,7 @@ class AdmissionController extends Controller
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
-        if ($admission->Posted) {
+        if ($admission->Closed) {
             return response()->json(['message' => 'Admission is closed'], 403);
         }
 
