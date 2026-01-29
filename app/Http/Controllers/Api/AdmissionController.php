@@ -8,6 +8,7 @@ use App\Http\Requests\Api\UploadAttachmentRequest;
 use App\Models\AdmissionAttachment;
 use App\Models\AdmissionFile;
 use App\Models\DigitalAdmissionForm;
+use App\Models\TblDocument;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -20,12 +21,29 @@ class AdmissionController extends Controller
     private const DEFAULT_PEN_WIDTH = 3;
     private const DEFAULT_ERASER_WIDTH = 48;
 
+    private function toLegacyImageDataUri($value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (is_resource($value)) {
+            $value = stream_get_contents($value);
+        }
+
+        if (!is_string($value) || $value === '') {
+            return null;
+        }
+
+        return 'data:image/jpeg;base64,' . base64_encode($value);
+    }
+
     public function index(Request $request): JsonResponse
     {
         /** @var \App\Models\Doctor $doctor */
         $doctor = $request->user();
 
-        $admissions = AdmissionFile::query()
+        $admissionRecords = AdmissionFile::query()
             ->with('patient')
             ->where('DoctorId', $doctor->Id)
             ->when($request->query('start_date'), fn ($query, $value) => $query->where('AdmDate', '>=', $value))
@@ -33,15 +51,28 @@ class AdmissionController extends Controller
             ->when($request->query('status'), fn ($query, $value) => $query->where('Closed', $value === 'closed' ? 1 : 0))
             ->orderBy('AdmDate', 'desc')
             ->limit(80)
+            ->get();
+
+        $legacyDocuments = TblDocument::query()
+            ->whereIn('AdmNb', $admissionRecords->pluck('Id')->filter()->all())
             ->get()
-            ->map(function (AdmissionFile $admission) {
-                return [
-                    'id' => $admission->Id,
-                    'Patient' => "{$admission->Patient?->First} {$admission->Patient?->Last}",
-                    'AdmDate' => optional($admission->AdmDate)->toDateTimeString(),
-                    'Status' => $admission->Closed ? 'closed' : 'open',
-                ];
-            });
+            ->groupBy('AdmNb');
+
+        $admissions = $admissionRecords->map(function (AdmissionFile $admission) use ($legacyDocuments) {
+            $legacyTump = ($legacyDocuments->get($admission->Id) ?? collect())
+                ->map(fn (TblDocument $doc) => $this->toLegacyImageDataUri($doc->Tump))
+                ->filter()
+                ->values()
+                ->all();
+
+            return [
+                'id' => $admission->Id,
+                'Patient' => "{$admission->Patient?->First} {$admission->Patient?->Last}",
+                'AdmDate' => optional($admission->AdmDate)->toDateTimeString(),
+                'Status' => $admission->Closed ? 'closed' : 'open',
+                'LegacyTump' => $legacyTump,
+            ];
+        });
 
         return response()->json([
             'admissions' => $admissions,
@@ -56,18 +87,41 @@ class AdmissionController extends Controller
         $admission = AdmissionFile::with(['Patient', 'DigitalForm'])
             ->findOrFail($id);
 
-        $history = AdmissionFile::with('doctor')
+        $historyRecords = AdmissionFile::with('doctor')
             ->where('PatientId', $admission->PatientId)
             ->orderBy('AdmDate', 'desc')
             ->limit(5)
+            ->get();
+
+        $legacyLookupIds = $historyRecords->pluck('Id')->push($admission->Id)->unique()->filter()->all();
+
+        $legacyDocuments = TblDocument::query()
+            ->whereIn('AdmNb', $legacyLookupIds)
             ->get()
-            ->map(fn (AdmissionFile $record) => [
+            ->groupBy('AdmNb');
+
+        $history = $historyRecords->map(function (AdmissionFile $record) use ($legacyDocuments) {
+            $legacyTump = ($legacyDocuments->get($record->Id) ?? collect())
+                ->map(fn (TblDocument $doc) => $this->toLegacyImageDataUri($doc->Tump))
+                ->filter()
+                ->values()
+                ->all();
+
+            return [
                 'id' => $record->Id,
                 'admDate' => optional($record->AdmDate)->toDateTimeString(),
                 'status' => $record->Closed ? 'closed' : 'open',
                 'doctorId' => $record->DoctorId,
                 'doctorName' => optional($record->doctor)->FullName,
-            ]);
+                'legacyTump' => $legacyTump,
+            ];
+        });
+
+        $legacyDocumentsForAdmission = ($legacyDocuments->get($admission->Id) ?? collect())
+            ->map(fn (TblDocument $doc) => $this->toLegacyImageDataUri($doc->Document))
+            ->filter()
+            ->values()
+            ->all();
 
         $attachments = $admission->attachments()
             ->orderBy('UploadedAt', 'desc')
@@ -87,6 +141,7 @@ class AdmissionController extends Controller
             'Patient' => $admission->Patient,
             'History' => $history,
             'DigitalForm' => $admission->DigitalForm,
+            'LegacyDocuments' => $legacyDocumentsForAdmission,
             'Attachments' => $attachments,
         ]);
     }
