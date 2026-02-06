@@ -49,6 +49,25 @@ class AdmissionController extends Controller
             ->when($request->query('start_date'), fn ($query, $value) => $query->where('AdmDate', '>=', $value))
             ->when($request->query('end_date'), fn ($query, $value) => $query->where('AdmDate', '<=', $value))
             ->when($request->query('status'), fn ($query, $value) => $query->where('Closed', $value === 'closed' ? 1 : 0))
+            ->when($request->query('patient'), function ($query, $value) {
+                $value = trim((string) $value);
+                if ($value === '') {
+                    return $query;
+                }
+
+                $like = '%' . $value . '%';
+
+                return $query->whereHas('patient', function ($patientQuery) use ($like) {
+                    $patientQuery->where(function ($innerQuery) use ($like) {
+                        $innerQuery
+                            ->where('First', 'like', $like)
+                            ->orWhere('Middle', 'like', $like)
+                            ->orWhere('Last', 'like', $like)
+                            ->orWhere('ArabicName', 'like', $like)
+                            ->orWhere('Phone', 'like', $like);
+                    });
+                });
+            })
             ->orderBy('AdmDate', 'desc')
             ->limit(80)
             ->get();
