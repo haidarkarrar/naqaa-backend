@@ -43,7 +43,10 @@ class AdmissionController extends Controller
         /** @var \App\Models\Doctor $doctor */
         $doctor = $request->user();
 
-        $admissionRecords = AdmissionFile::query()
+        $perPage = max(1, min(100, (int) $request->query('per_page', 10)));
+        $page = max(1, (int) $request->query('page', 1));
+
+        $admissionQuery = AdmissionFile::query()
             ->with('patient')
             ->where('DoctorId', $doctor->Id)
             ->when($request->query('start_date'), fn ($query, $value) => $query->where('AdmDate', '>=', $value))
@@ -68,9 +71,10 @@ class AdmissionController extends Controller
                     });
                 });
             })
-            ->orderBy('AdmDate', 'desc')
-            ->limit(80)
-            ->get();
+            ->orderBy('AdmDate', 'desc');
+
+        $paginator = $admissionQuery->paginate($perPage, ['*'], 'page', $page);
+        $admissionRecords = collect($paginator->items());
 
         $legacyDocuments = TblDocument::query()
             ->whereIn('AdmNb', $admissionRecords->pluck('Id')->filter()->all())
@@ -95,6 +99,12 @@ class AdmissionController extends Controller
 
         return response()->json([
             'admissions' => $admissions,
+            'pagination' => [
+                'page' => $paginator->currentPage(),
+                'per_page' => $paginator->perPage(),
+                'total' => $paginator->total(),
+                'last_page' => $paginator->lastPage(),
+            ],
         ]);
     }
 
