@@ -126,6 +126,19 @@ return [
             'prefix_indexes' => true,
         ],
 
+        'naqaa' => [
+            'driver' => env('NAQAA_DB_DRIVER', 'mysql'),
+            'url' => env('NAQAA_DB_URL'),
+            'host' => env('NAQAA_DB_HOST', '127.0.0.1'),
+            'port' => env('NAQAA_DB_PORT', '3306'),
+            'database' => env('NAQAA_DB_DATABASE', 'naqaa'),
+            'username' => env('NAQAA_DB_USERNAME', 'root'),
+            'password' => env('NAQAA_DB_PASSWORD', ''),
+            'charset' => env('NAQAA_DB_CHARSET', 'utf8'),
+            'prefix' => '',
+            'prefix_indexes' => true,
+        ],
+
         'archive' => [
             'driver' => env('ARCHIVE_DB_DRIVER', 'mysql'),
             'url' => env('ARCHIVE_DB_URL'),

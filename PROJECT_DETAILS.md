@@ -20,7 +20,6 @@
 - `DigitalAdmissionForm` persists form payload + strokes arrays, `status`, and `form_version`.
 - `AdmissionAttachment` (`archive` connection) timestamps `uploaded_at` and stores `path`, `mime`, `label`.
 - `DoctorApiToken` hashes tokens, enforces expiration, and includes helper `findForToken()` used by the auth middleware.
-- `DoctorDrawingSession` is available for future stylus data tracking.
 
 ### Validation & requests
 

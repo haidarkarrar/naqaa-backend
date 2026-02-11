@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class DoctorRefreshToken extends Model
 {
-    protected $connection = 'meditop';
+    protected $connection = 'naqaa';
     protected $table = 'doctor_refresh_tokens';
     protected $primaryKey = 'Id';
     public $timestamps = false;

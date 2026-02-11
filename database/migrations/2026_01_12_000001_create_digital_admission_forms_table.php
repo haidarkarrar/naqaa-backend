@@ -8,7 +8,7 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::connection('meditop')->create('TblDigitalAdmissionForms', function (Blueprint $table) {
+        Schema::connection('naqaa')->create('TblDigitalAdmissionForms', function (Blueprint $table) {
             $table->increments('Id');
             $table->unsignedBigInteger('DoctorId');
             $table->unsignedBigInteger('AdmissionId');
@@ -22,6 +22,6 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::connection('meditop')->dropIfExists('TblDigitalAdmissionForms');
+        Schema::connection('naqaa')->dropIfExists('TblDigitalAdmissionForms');
     }
 };

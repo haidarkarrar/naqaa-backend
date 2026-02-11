@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class DigitalAdmissionForm extends Model
 {
-    protected $connection = 'meditop';
+    protected $connection = 'naqaa';
     protected $table = 'TblDigitalAdmissionForms';
     protected $primaryKey = 'Id';
 

@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class DoctorApiToken extends Model
 {
-    protected $connection = 'meditop';
+    protected $connection = 'naqaa';
     protected $table = 'doctor_api_tokens';
     protected $primaryKey = 'Id';
 

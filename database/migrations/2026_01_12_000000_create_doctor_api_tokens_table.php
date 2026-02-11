@@ -8,7 +8,7 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::connection('meditop')->create('doctor_api_tokens', function (Blueprint $table) {
+        Schema::connection('naqaa')->create('doctor_api_tokens', function (Blueprint $table) {
             $table->increments('Id');
             $table->unsignedBigInteger('DoctorId');
             $table->string('Name')->default('mobile');
@@ -22,6 +22,6 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::connection('meditop')->dropIfExists('doctor_api_tokens');
+        Schema::connection('naqaa')->dropIfExists('doctor_api_tokens');
     }
 };
