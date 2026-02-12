@@ -8,17 +8,89 @@ use Illuminate\Support\Facades\Hash;
 
 class LegacyDataSeeder extends Seeder
 {
+    /**
+     * Insert records only if they don't exist (SQL Server compatible)
+     * Handles IDENTITY_INSERT for SQL Server when inserting explicit IDs
+     */
+    private function insertIfNotExists($connection, $table, $data, $keyColumn = 'Id'): void
+    {
+        if (empty($data)) {
+            return;
+        }
+
+        $driver = $connection->getDriverName();
+        $needsIdentityInsert = $driver === 'sqlsrv' && isset($data[0][$keyColumn]);
+
+        // Use transaction to ensure IDENTITY_INSERT is respected
+        $connection->beginTransaction();
+        
+        try {
+            // Enable IDENTITY_INSERT for SQL Server if needed
+            if ($needsIdentityInsert) {
+                // Use unprepared to ensure it executes immediately
+                $connection->unprepared("SET IDENTITY_INSERT [{$table}] ON");
+            }
+
+            foreach ($data as $record) {
+                $keyValue = $record[$keyColumn] ?? null;
+                if ($keyValue === null) {
+                    continue;
+                }
+
+                $exists = $connection->table($table)
+                    ->where($keyColumn, $keyValue)
+                    ->exists();
+
+                if (!$exists) {
+                    if ($needsIdentityInsert) {
+                        // Use raw SQL for inserts when IDENTITY_INSERT is enabled
+                        // Laravel's insert() method doesn't respect IDENTITY_INSERT, so we use raw SQL
+                        $columns = array_keys($record);
+                        $values = array_values($record);
+                        
+                        $columnsStr = '[' . implode('], [', $columns) . ']';
+                        $placeholders = array_fill(0, count($values), '?');
+                        $placeholdersStr = implode(', ', $placeholders);
+                        
+                        $sql = "INSERT INTO [{$table}] ({$columnsStr}) VALUES ({$placeholdersStr})";
+                        $connection->statement($sql, $values);
+                    } else {
+                        $connection->table($table)->insert($record);
+                    }
+                }
+            }
+
+            // Disable IDENTITY_INSERT before committing
+            if ($needsIdentityInsert) {
+                $connection->unprepared("SET IDENTITY_INSERT [{$table}] OFF");
+            }
+
+            $connection->commit();
+        } catch (\Exception $e) {
+            // Disable IDENTITY_INSERT on error
+            if ($needsIdentityInsert) {
+                try {
+                    $connection->unprepared("SET IDENTITY_INSERT [{$table}] OFF");
+                } catch (\Exception $e2) {
+                    // Ignore errors when disabling
+                }
+            }
+            $connection->rollBack();
+            throw $e;
+        }
+    }
+
     public function run(): void
     {
         $meditop = DB::connection('meditop');
 
-        $meditop->table('TblSpecialities')->insertOrIgnore([
+        $this->insertIfNotExists($meditop, 'TblSpecialities', [
             ['Id' => 1, 'Name' => 'General Practice'],
             ['Id' => 2, 'Name' => 'Cardiology'],
             ['Id' => 3, 'Name' => 'Radiology'],
         ]);
 
-        $meditop->table('TblDoctors')->insertOrIgnore([
+        $this->insertIfNotExists($meditop, 'TblDoctors', [
             [
                 'Id' => 1,
                 'FirstName' => 'Alaa',
@@ -82,13 +154,13 @@ class LegacyDataSeeder extends Seeder
             ],
         ];
 
-        $meditop->table('TblPatients')->insertOrIgnore($patients);
+        $this->insertIfNotExists($meditop, 'TblPatients', $patients);
 
-        $meditop->table('TblGuarantors')->insertOrIgnore([
+        $this->insertIfNotExists($meditop, 'TblGuarantors', [
             ['Id' => 1, 'Name' => 'NMC Group', 'Active' => true, 'AccountId' => 1],
         ]);
 
-        $meditop->table('TblAdmFiles')->insertOrIgnore([
+        $this->insertIfNotExists($meditop, 'TblAdmFiles', [
             [
                 'Id' => 100,
                 'PatientId' => 1,
