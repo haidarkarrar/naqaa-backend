@@ -19,7 +19,41 @@ class LegacyDataSeeder extends Seeder
         }
 
         $driver = $connection->getDriverName();
-        $needsIdentityInsert = $driver === 'sqlsrv' && isset($data[0][$keyColumn]);
+        $hasExplicitId = isset($data[0][$keyColumn]);
+        $needsIdentityInsert = false;
+
+        // Check if the column has IDENTITY property (only for SQL Server)
+        if ($driver === 'sqlsrv' && $hasExplicitId) {
+            try {
+                // Try different table name formats
+                $tableVariations = [
+                    "dbo.[{$table}]",
+                    "[dbo].[{$table}]",
+                    "{$table}",
+                    "[{$table}]",
+                ];
+                
+                $result = null;
+                foreach ($tableVariations as $tableName) {
+                    $result = $connection->selectOne("
+                        SELECT is_identity 
+                        FROM sys.columns 
+                        WHERE object_id = OBJECT_ID(?) 
+                        AND name = ?
+                    ", [$tableName, $keyColumn]);
+                    
+                    if ($result !== null) {
+                        break;
+                    }
+                }
+                
+                $needsIdentityInsert = $result && isset($result->is_identity) && $result->is_identity == 1;
+            } catch (\Exception $e) {
+                // If check fails, assume no IDENTITY and proceed without IDENTITY_INSERT
+                // This handles cases where table doesn't exist or column doesn't have IDENTITY
+                $needsIdentityInsert = false;
+            }
+        }
 
         // Use transaction to ensure IDENTITY_INSERT is respected
         $connection->beginTransaction();
