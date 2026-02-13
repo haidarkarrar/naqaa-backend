@@ -24,6 +24,9 @@ class DigitalAdmissionForm extends Model
     ];
 
     protected $casts = [
+        'Id' => 'integer',
+        'DoctorId' => 'integer',
+        'AdmissionId' => 'integer',
         'Payload' => 'array',
         'Strokes' => 'array',
     ];

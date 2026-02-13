@@ -41,6 +41,13 @@ class Patient extends Model
         'SurgicalHistory',
     ];
 
+    protected $casts = [
+        'Id' => 'integer',
+        'GenderId' => 'integer',
+        'MainDoctorId' => 'integer',
+        'GuarantorId' => 'integer',
+    ];
+
     public function admissions(): HasMany
     {
         return $this->hasMany(AdmissionFile::class, 'PatientId', 'Id');

@@ -29,6 +29,8 @@ class DoctorRefreshToken extends Model
     ];
 
     protected $casts = [
+        'Id' => 'integer',
+        'DoctorId' => 'integer',
         'ExpiresAt' => 'datetime',
         'RevokedAt' => 'datetime',
         'LastUsedAt' => 'datetime',

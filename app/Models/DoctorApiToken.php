@@ -25,6 +25,8 @@ class DoctorApiToken extends Model
     ];
 
     protected $casts = [
+        'Id' => 'integer',
+        'DoctorId' => 'integer',
         'Abilities' => 'array',
         'ExpiresAt' => 'datetime',
         'LastUsedAt' => 'datetime',

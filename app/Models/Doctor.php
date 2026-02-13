@@ -33,6 +33,8 @@ class Doctor extends Model
     ];
 
     protected $casts = [
+        'Id' => 'integer',
+        'SpecialtyId' => 'integer',
         'Radiologist' => 'boolean',
         'Approved' => 'boolean',
     ];

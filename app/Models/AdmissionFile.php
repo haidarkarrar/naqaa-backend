@@ -15,6 +15,20 @@ class AdmissionFile extends Model
 
     protected $casts = [
         'AdmDate' => 'datetime',
+        // SQL Server can return int/bit as strings; cast so API returns consistent types
+        'Id' => 'integer',
+        'PatientId' => 'integer',
+        'DoctorId' => 'integer',
+        'GuarantorId' => 'integer',
+        'Closed' => 'boolean',
+        'Posted' => 'boolean',
+        'PaymentClosed' => 'boolean',
+        'PaymentClosed1' => 'boolean',
+        'ForDoctor' => 'boolean',
+        'ForPatient' => 'boolean',
+        'Checked' => 'boolean',
+        'Approved' => 'boolean',
+        'LastPostState' => 'boolean',
     ];
 
     public function patient(): BelongsTo

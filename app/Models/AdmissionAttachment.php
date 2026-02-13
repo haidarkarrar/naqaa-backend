@@ -12,6 +12,9 @@ class AdmissionAttachment extends Model
     protected $primaryKey = 'Id';
 
     protected $casts = [
+        'Id' => 'integer',
+        'DoctorId' => 'integer',
+        'AdmissionId' => 'integer',
         'UploadedAt' => 'datetime',
     ];
 
