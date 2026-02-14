@@ -113,7 +113,15 @@ class AdmissionController extends Controller
         /** @var \App\Models\Doctor $doctor */
         $doctor = $request->user();
 
-        $admission = AdmissionFile::with(['Patient', 'DigitalForm'])
+        Log::info('API get single admission request', [
+            'admission_id' => $id,
+            'doctor_id' => $doctor->Id ?? null,
+            'url' => $request->fullUrl(),
+            'method' => $request->method(),
+        ]);
+
+        try {
+            $admission = AdmissionFile::with(['Patient', 'DigitalForm'])
             ->findOrFail($id);
 
         $historyRecords = AdmissionFile::with('doctor')
@@ -165,14 +173,25 @@ class AdmissionController extends Controller
                 ];
             });
 
-        return response()->json([
-            'Admission' => $admission,
-            'Patient' => $admission->Patient,
-            'History' => $history,
-            'DigitalForm' => $admission->DigitalForm,
-            'LegacyDocuments' => $legacyDocumentsForAdmission,
-            'Attachments' => $attachments,
-        ]);
+            return response()->json([
+                'Admission' => $admission,
+                'Patient' => $admission->Patient,
+                'History' => $history,
+                'DigitalForm' => $admission->DigitalForm,
+                'LegacyDocuments' => $legacyDocumentsForAdmission,
+                'Attachments' => $attachments,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('API get single admission failed', [
+                'admission_id' => $id,
+                'doctor_id' => $doctor->Id ?? null,
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            throw $e;
+        }
     }
 
     public function saveForm(int $id, SaveDigitalFormRequest $request): JsonResponse
