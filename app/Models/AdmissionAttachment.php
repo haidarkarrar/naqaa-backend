@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class AdmissionAttachment extends Model
 {
-    protected $connection = 'archive';
+    protected $connection = 'naqaa';
     protected $table = 'TblAdmissionAttachments';
     protected $primaryKey = 'Id';
 

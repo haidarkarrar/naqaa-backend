@@ -11,14 +11,14 @@
 - `GET /api/doctor/admissions` → `AdmissionController@index` fetches up to 80 admissions for the logged-in doctor, with optional `start_date`, `end_date`, and `status` filters. Each payload includes patient name, formatted date, and status.
 - `GET /api/doctor/admissions/{id}` → `AdmissionController@show` returns the admission record plus patient, history, digital form, and attachments after checking doctor ownership.
 - `POST /api/doctor/admissions/{id}/form` → `saveForm` stores or updates `TblDigitalAdmissionForms` with JSON `payload`, optional strokes/metadata, and `status`/`form_version`.
-- `POST /api/doctor/admissions/{id}/attachments` → `uploadAttachment` streams the uploaded image to the `public` disk under `admissions/` and records metadata in `TblAdmissionAttachments` (archive connection).
+- `POST /api/doctor/admissions/{id}/attachments` → `uploadAttachment` streams the uploaded image to the `public` disk under `admissions/` and records metadata in `TblAdmissionAttachments` (naqaa connection).
 
 ### Key models
 
 - `Doctor` (connection `meditop`, table `TblDoctors`) manages doctors, relations to tokens and admissions.
 - `AdmissionFile` (`TblAdmFiles`) links to `Patient`, `DigitalAdmissionForm`, and `AdmissionAttachment`.
 - `DigitalAdmissionForm` persists form payload + strokes arrays, `status`, and `form_version`.
-- `AdmissionAttachment` (`archive` connection) timestamps `uploaded_at` and stores `path`, `mime`, `label`.
+- `AdmissionAttachment` (connection `naqaa`, table `TblAdmissionAttachments`) stores `path`, `mime`, `label`, and `UploadedAt`.
 - `DoctorApiToken` hashes tokens, enforces expiration, and includes helper `findForToken()` used by the auth middleware.
 
 ### Validation & requests
