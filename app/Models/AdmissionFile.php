@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -30,6 +31,32 @@ class AdmissionFile extends Model
         'Approved' => 'boolean',
         'LastPostState' => 'boolean',
     ];
+
+    public function scopeAssignedToDoctorViaWorks(Builder $query, int $doctorId): Builder
+    {
+        $admissionsTable = $query->getModel()->getTable();
+
+        return $query->whereExists(function ($subQuery) use ($admissionsTable, $doctorId) {
+            $subQuery
+                ->selectRaw('1')
+                ->from('tblWorks')
+                ->whereColumn('tblWorks.AdmId', $admissionsTable . '.Id')
+                ->where('tblWorks.DoctorId', $doctorId);
+        });
+    }
+
+    public function scopeWithNonNullWorksDoctor(Builder $query): Builder
+    {
+        $admissionsTable = $query->getModel()->getTable();
+
+        return $query->whereExists(function ($subQuery) use ($admissionsTable) {
+            $subQuery
+                ->selectRaw('1')
+                ->from('tblWorks')
+                ->whereColumn('tblWorks.AdmId', $admissionsTable . '.Id')
+                ->whereNotNull('tblWorks.DoctorId');
+        });
+    }
 
     public function patient(): BelongsTo
     {
