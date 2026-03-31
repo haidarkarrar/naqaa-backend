@@ -8,6 +8,10 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (Schema::connection('naqaa')->hasTable('TblDigitalAdmissionForms')) {
+            return;
+        }
+
         Schema::connection('naqaa')->create('TblDigitalAdmissionForms', function (Blueprint $table) {
             $table->increments('Id');
             $table->unsignedBigInteger('DoctorId');

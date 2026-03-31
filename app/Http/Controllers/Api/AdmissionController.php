@@ -3,14 +3,23 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Api\BatchUpdateAdmissionStatusRequest;
+use App\Http\Requests\Api\PreviewBatchAdmissionStatusRequest;
 use App\Http\Requests\Api\SaveDigitalFormRequest;
+use App\Http\Requests\Api\UpdateAdmissionStatusRequest;
 use App\Http\Requests\Api\UploadAttachmentRequest;
 use App\Models\AdmissionAttachment;
 use App\Models\AdmissionFile;
+use App\Models\AdmissionStatusAudit;
 use App\Models\DigitalAdmissionForm;
 use App\Models\TblDocument;
+use App\Models\User;
+use App\Support\PermissionCatalog;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -22,85 +31,55 @@ class AdmissionController extends Controller
     private const DEFAULT_ERASER_WIDTH = 48;
     private const LEGACY_PLACEHOLDER_DATA_URI = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
 
-    private function toLegacyImageDataUri($value): ?string
-    {
-        if ($value === null) {
-            return null;
-        }
-
-        if (is_resource($value)) {
-            $value = stream_get_contents($value);
-        }
-
-        if (!is_string($value) || $value === '') {
-            return null;
-        }
-
-        return 'data:image/jpeg;base64,' . base64_encode($value);
-    }
-
-    private function toLegacyDocumentDataUri(TblDocument $document): string
-    {
-        return $this->toLegacyImageDataUri($document->Document)
-            ?? $this->toLegacyImageDataUri($document->Tump)
-            ?? self::LEGACY_PLACEHOLDER_DATA_URI;
-    }
-
-    private function toLegacyPreviewDataUri(TblDocument $document): string
-    {
-        return $this->toLegacyImageDataUri($document->Document)
-            ?? $this->toLegacyImageDataUri($document->Tump)
-            ?? self::LEGACY_PLACEHOLDER_DATA_URI;
-    }
-
     public function index(Request $request): JsonResponse
     {
-        /** @var \App\Models\Doctor $doctor */
-        $doctor = $request->user();
+        /** @var User $user */
+        $user = $request->user();
 
         $perPage = max(1, min(100, (int) $request->query('per_page', 10)));
         $page = max(1, (int) $request->query('page', 1));
 
+        $scope = $this->resolveScopeForPermissions(
+            $user,
+            PermissionCatalog::ADMISSIONS_LIST_ALL,
+            PermissionCatalog::ADMISSIONS_LIST_ASSIGNED,
+        );
+
         $admissionQuery = AdmissionFile::query()
             ->with('patient')
-            ->assignedToDoctorViaWorks($doctor->Id)
-            ->when($request->query('start_date'), fn ($query, $value) => $query->where('AdmDate', '>=', $value))
-            ->when($request->query('end_date'), fn ($query, $value) => $query->where('AdmDate', '<=', $value))
-            ->when($request->query('status'), fn ($query, $value) => $query->where('Closed', $value === 'closed' ? 1 : 0))
-            ->when($request->query('patient'), function ($query, $value) {
-                $value = trim((string) $value);
-                if ($value === '') {
-                    return $query;
-                }
-
-                $like = '%' . $value . '%';
-
-                return $query->whereHas('patient', function ($patientQuery) use ($like) {
-                    $patientQuery->where(function ($innerQuery) use ($like) {
-                        $innerQuery
-                            ->where('First', 'like', $like)
-                            ->orWhere('Middle', 'like', $like)
-                            ->orWhere('Last', 'like', $like)
-                            ->orWhere('ArabicName', 'like', $like)
-                            ->orWhere('Phone', 'like', $like);
-                    });
-                });
-            })
+            ->tap(fn (Builder $query) => $this->applyAdmissionScope($query, $scope))
+            ->tap(fn (Builder $query) => $this->applyAdmissionListFilters($query, [
+                'status' => $request->query('status'),
+                'start_date' => $request->query('start_date'),
+                'end_date' => $request->query('end_date'),
+                'patient' => $request->query('patient'),
+            ]))
             ->orderBy('AdmDate', 'desc');
 
         $paginator = $admissionQuery->paginate($perPage, ['*'], 'page', $page);
         $admissionRecords = collect($paginator->items());
+        $admissionIds = $admissionRecords->pluck('Id')->map(fn ($id) => (int) $id)->values();
 
         $legacyDocuments = TblDocument::query()
-            ->whereIn('AdmNb', $admissionRecords->pluck('Id')->filter()->all())
+            ->whereIn('AdmNb', $admissionIds->all())
             ->get()
             ->groupBy('AdmNb');
 
-        $admissions = $admissionRecords->map(function (AdmissionFile $admission) use ($legacyDocuments) {
+        $assignedLookup = $this->buildAssignedLookupForUser($user, $admissionIds);
+
+        $admissions = $admissionRecords->map(function (AdmissionFile $admission) use ($legacyDocuments, $assignedLookup, $user) {
             $legacyTump = ($legacyDocuments->get($admission->Id) ?? collect())
                 ->map(fn (TblDocument $doc) => $this->toLegacyPreviewDataUri($doc))
                 ->values()
                 ->all();
+
+            $isAssignedToUser = isset($assignedLookup[(int) $admission->Id]);
+            $actions = $this->buildAdmissionActions(
+                $user,
+                $isAssignedToUser,
+                (bool) $admission->Closed,
+                !empty($legacyTump),
+            );
 
             return [
                 'id' => $admission->Id,
@@ -108,6 +87,7 @@ class AdmissionController extends Controller
                 'AdmDate' => optional($admission->AdmDate)->toDateTimeString(),
                 'Status' => $admission->Closed ? 'closed' : 'open',
                 'LegacyTump' => $legacyTump,
+                ...$actions,
             ];
         });
 
@@ -124,90 +104,36 @@ class AdmissionController extends Controller
 
     public function show(int $id, Request $request): JsonResponse
     {
-        /** @var \App\Models\Doctor $doctor */
-        $doctor = $request->user();
+        /** @var User $user */
+        $user = $request->user();
 
         Log::info('API get single admission request', [
             'admission_id' => $id,
-            'doctor_id' => $doctor->Id ?? null,
+            'user_id' => $user->id ?? null,
             'url' => $request->fullUrl(),
             'method' => $request->method(),
         ]);
 
         try {
-            $admission = AdmissionFile::with(['Patient', 'DigitalForm'])
-                ->findOrFail($id);
+            $admission = $this->resolveAdmissionByPermission(
+                $user,
+                $id,
+                PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ALL,
+                PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ASSIGNED,
+                ['Patient', 'DigitalForm']
+            );
 
-            $historyRecords = AdmissionFile::query()
-                ->with('doctor')
-                ->where('PatientId', $admission->PatientId)
-                ->withNonNullWorksDoctor()
-                ->orderBy('AdmDate', 'desc')
-                ->get();
+            $isAssignedToUser = $this->isAdmissionAssignedToUser($user, (int) $admission->Id);
 
-            $legacyLookupIds = $historyRecords->pluck('Id')->push($admission->Id)->unique()->filter()->all();
-            $historyPatientIds = $historyRecords->pluck('PatientId')->push($admission->PatientId)->unique()->filter()->all();
-            $historyAdmissionIds = collect($legacyLookupIds)
-                ->map(fn ($value) => (int) $value)
-                ->values();
+            $history = collect();
+            if ($user->can(PermissionCatalog::ADMISSIONS_HISTORY_VIEW)) {
+                $history = $this->buildHistoryPayload($user, $admission);
+            }
 
             $legacyDocumentsByAdmission = TblDocument::query()
-                ->whereIn('AdmNb', $legacyLookupIds)
+                ->where('AdmNb', (int) $admission->Id)
                 ->get()
                 ->groupBy('AdmNb');
-
-            $legacyDocumentsByPatient = empty($historyPatientIds)
-                ? collect()
-                : TblDocument::query()
-                    ->whereIn('MRN', $historyPatientIds)
-                    ->get()
-                    ->groupBy('MRN');
-
-            $historyAdmissions = $historyRecords->map(function (AdmissionFile $record) use ($legacyDocumentsByAdmission) {
-                $legacyTump = ($legacyDocumentsByAdmission->get($record->Id) ?? collect())
-                    ->map(fn (TblDocument $doc) => $this->toLegacyPreviewDataUri($doc))
-                    ->values()
-                    ->all();
-
-                return [
-                    'id' => $record->Id,
-                    'admissionNumber' => (int) $record->Id,
-                    'historyType' => 'admission',
-                    'admDate' => optional($record->AdmDate)->toDateTimeString(),
-                    'status' => $record->Closed ? 'closed' : 'open',
-                    'doctorId' => $record->DoctorId,
-                    'doctorName' => optional($record->doctor)->FullName,
-                    'legacyTump' => $legacyTump,
-                    'legacyDocumentId' => null,
-                ];
-            });
-
-            $legacyOnlyHistory = ($legacyDocumentsByPatient->get($admission->PatientId) ?? collect())
-                ->filter(function (TblDocument $doc) use ($historyAdmissionIds) {
-                    if ($doc->AdmNb === null) {
-                        return true;
-                    }
-
-                    return !$historyAdmissionIds->contains((int) $doc->AdmNb);
-                })
-                ->map(function (TblDocument $doc) {
-                    return [
-                        'id' => null,
-                        'admissionNumber' => $doc->AdmNb !== null ? (int) $doc->AdmNb : null,
-                        'historyType' => 'legacy',
-                        'admDate' => optional($doc->Date)->toDateTimeString(),
-                        'status' => 'legacy',
-                        'doctorId' => null,
-                        'doctorName' => null,
-                        'legacyTump' => [$this->toLegacyPreviewDataUri($doc)],
-                        'legacyDocumentId' => (int) $doc->Id,
-                    ];
-                });
-
-            $history = $historyAdmissions
-                ->merge($legacyOnlyHistory)
-                ->sortByDesc(fn (array $item) => $item['admDate'] ?? '0000-00-00 00:00:00')
-                ->values();
 
             $legacyDocumentsForAdmission = ($legacyDocumentsByAdmission->get($admission->Id) ?? collect())
                 ->map(fn (TblDocument $doc) => $this->toLegacyDocumentDataUri($doc))
@@ -227,6 +153,13 @@ class AdmissionController extends Controller
                     ];
                 });
 
+            $actions = $this->buildAdmissionActions(
+                $user,
+                $isAssignedToUser,
+                (bool) $admission->Closed,
+                !empty($legacyDocumentsForAdmission),
+            );
+
             return response()->json([
                 'Admission' => $admission,
                 'Patient' => $admission->Patient,
@@ -234,11 +167,12 @@ class AdmissionController extends Controller
                 'DigitalForm' => $admission->DigitalForm,
                 'LegacyDocuments' => $legacyDocumentsForAdmission,
                 'Attachments' => $attachments,
+                ...$actions,
             ]);
         } catch (\Throwable $e) {
             Log::error('API get single admission failed', [
                 'admission_id' => $id,
-                'doctor_id' => $doctor->Id ?? null,
+                'user_id' => $user->id ?? null,
                 'message' => $e->getMessage(),
                 'file' => $e->getFile(),
                 'line' => $e->getLine(),
@@ -250,28 +184,294 @@ class AdmissionController extends Controller
 
     public function saveForm(int $id, SaveDigitalFormRequest $request): JsonResponse
     {
-        /** @var \App\Models\Doctor $doctor */
-        $doctor = $request->user();
-    
-        // Fetch the admission
-        $admission = AdmissionFile::findOrFail($id);
-    
-        // Check if the logged-in doctor owns this admission
-        if ($admission->DoctorId !== $doctor->Id) {
-            return response()->json(['message' => 'Forbidden'], 403);
-        }
+        /** @var User $user */
+        $user = $request->user();
+
+        $admission = $this->resolveAdmissionByPermission(
+            $user,
+            $id,
+            PermissionCatalog::ADMISSIONS_FORM_EDIT_ALL,
+            PermissionCatalog::ADMISSIONS_FORM_EDIT_ASSIGNED,
+        );
 
         if ($admission->Closed) {
             return response()->json(['message' => 'Admission is closed'], 403);
         }
-    
-        // Find or create the form
+
+        if ($this->hasLegacyDocuments((int) $admission->Id)) {
+            return response()->json(['message' => 'Admission has legacy documents and cannot be edited'], 403);
+        }
+
         $form = DigitalAdmissionForm::firstOrNew(['AdmissionId' => $admission->Id]);
-        
-        // Set attributes explicitly
-        $form->DoctorId = $doctor->Id;
+        $form->DoctorId = $user->doctor_id ?? (int) $admission->DoctorId;
+        $form->UpdatedByUserId = $user->id;
         $form->Payload = $request->Payload;
-        $sanitizedStrokes = collect($request->Strokes ?? [])
+        $form->Strokes = $this->sanitizeStrokes($request->Strokes ?? []);
+        $form->FormVersion = $request->FormVersion ?? 'v1';
+        $form->Status = $request->Status ?? 'draft';
+        $form->save();
+
+        return response()->json([
+            'Form' => $form->fresh(),
+        ]);
+    }
+
+    public function uploadAttachment(int $id, UploadAttachmentRequest $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        $admission = $this->resolveAdmissionByPermission(
+            $user,
+            $id,
+            PermissionCatalog::ADMISSIONS_ATTACHMENTS_MANAGE_ALL,
+            PermissionCatalog::ADMISSIONS_ATTACHMENTS_MANAGE_ASSIGNED,
+        );
+
+        if ($admission->Closed) {
+            return response()->json(['message' => 'Admission is closed'], 403);
+        }
+
+        if ($this->hasLegacyDocuments((int) $admission->Id)) {
+            return response()->json(['message' => 'Admission has legacy documents and cannot be edited'], 403);
+        }
+
+        Log::info('Admission attachment upload requested', [
+            'user_id' => $user->id,
+            'admission_id' => $admission->Id,
+            'has_file' => $request->hasFile('File'),
+        ]);
+
+        try {
+            $file = $request->file('File');
+            $path = Storage::disk('public')->putFile('admissions', $file);
+
+            $attachment = AdmissionAttachment::create([
+                'DoctorId' => $user->doctor_id ?? (int) $admission->DoctorId,
+                'UploadedByUserId' => $user->id,
+                'AdmissionId' => $admission->Id,
+                'Path' => $path,
+                'Mime' => $file->getClientMimeType(),
+                'Label' => $request->Label,
+                'UploadedAt' => now(),
+            ]);
+
+            Log::info('Admission attachment uploaded', [
+                'attachment_id' => $attachment->getKey(),
+                'user_id' => $user->id,
+                'admission_id' => $admission->Id,
+                'path' => $attachment->Path,
+            ]);
+
+            return response()->json([
+                'Attachment' => [
+                    'id' => $attachment->getKey(),
+                    'Path' => $attachment->Path,
+                    'Url' => Storage::url($attachment->Path),
+                    'Label' => $attachment->Label,
+                    'UploadedAt' => optional($attachment->UploadedAt)->toDateTimeString(),
+                ],
+            ]);
+        } catch (\Throwable $error) {
+            Log::error('Admission attachment upload failed', [
+                'user_id' => $user->id,
+                'admission_id' => $admission->Id,
+                'error' => $error->getMessage(),
+                'trace' => $error->getTraceAsString(),
+            ]);
+
+            return response()->json(['message' => 'Unable to upload attachment'], 500);
+        }
+    }
+
+    public function deleteAttachment(int $id, int $attachmentId, Request $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        $admission = $this->resolveAdmissionByPermission(
+            $user,
+            $id,
+            PermissionCatalog::ADMISSIONS_ATTACHMENTS_MANAGE_ALL,
+            PermissionCatalog::ADMISSIONS_ATTACHMENTS_MANAGE_ASSIGNED,
+        );
+
+        if ($admission->Closed) {
+            return response()->json(['message' => 'Admission is closed'], 403);
+        }
+
+        if ($this->hasLegacyDocuments((int) $admission->Id)) {
+            return response()->json(['message' => 'Admission has legacy documents and cannot be edited'], 403);
+        }
+
+        $attachment = AdmissionAttachment::query()
+            ->whereKey($attachmentId)
+            ->where('AdmissionId', $admission->Id)
+            ->firstOrFail();
+
+        if (Storage::disk('public')->exists($attachment->Path)) {
+            Storage::disk('public')->delete($attachment->Path);
+        }
+
+        $attachment->delete();
+
+        return response()->json(['message' => 'Deleted']);
+    }
+
+    public function updateStatus(int $id, UpdateAdmissionStatusRequest $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        if (!$user->can(PermissionCatalog::ADMISSIONS_STATUS_UPDATE)) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $admission = $this->resolveAdmissionByPermission(
+            $user,
+            $id,
+            PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ALL,
+            PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ASSIGNED,
+        );
+
+        $targetStatus = $request->status;
+        $targetClosed = $targetStatus === 'closed';
+        $currentStatus = $admission->Closed ? 'closed' : 'open';
+
+        if ((bool) $admission->Closed !== $targetClosed) {
+            AdmissionFile::query()
+                ->whereKey($admission->Id)
+                ->update(['Closed' => $targetClosed ? 1 : 0]);
+        }
+
+        AdmissionStatusAudit::create([
+            'admission_id' => (int) $admission->Id,
+            'old_status' => $currentStatus,
+            'new_status' => $targetStatus,
+            'changed_by_user_id' => $user->id,
+            'notes' => $request->notes,
+        ]);
+
+        return response()->json([
+            'message' => 'Admission status updated',
+            'status' => $targetStatus,
+        ]);
+    }
+
+    public function previewBatchStatus(PreviewBatchAdmissionStatusRequest $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        if (!$this->canBatchUpdateStatus($user)) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $validated = $request->validated();
+        $mode = (string) $validated['mode'];
+        $targetStatus = (string) $validated['status'];
+        $targetClosed = $targetStatus === 'closed';
+        $admissionIds = $mode === 'selected'
+            ? collect($validated['admission_ids'] ?? [])->map(fn ($id) => (int) $id)->unique()->values()->all()
+            : [];
+        $filters = $mode === 'filtered' ? ($validated['filters'] ?? []) : [];
+
+        $scope = $this->resolveScopeForPermissions(
+            $user,
+            PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ALL,
+            PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ASSIGNED,
+        );
+
+        $counts = $this->computeBatchStatusCounts(
+            $scope,
+            $mode,
+            $targetClosed,
+            $admissionIds,
+            $filters,
+        );
+
+        return response()->json([
+            'mode' => $mode,
+            'status' => $targetStatus,
+            'matched_count' => $counts['matched_count'],
+            'will_change_count' => $counts['will_change_count'],
+            'already_target_count' => $counts['already_target_count'],
+            'inaccessible_count' => $counts['inaccessible_count'],
+            'selection_summary' => $this->buildBatchSelectionSummary($mode, $admissionIds, $filters),
+        ]);
+    }
+
+    public function batchUpdateStatus(BatchUpdateAdmissionStatusRequest $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        if (!$this->canBatchUpdateStatus($user)) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $validated = $request->validated();
+        $mode = (string) $validated['mode'];
+        $targetStatus = (string) $validated['status'];
+        $targetClosed = $targetStatus === 'closed';
+        $admissionIds = $mode === 'selected'
+            ? collect($validated['admission_ids'] ?? [])->map(fn ($id) => (int) $id)->unique()->values()->all()
+            : [];
+        $filters = $mode === 'filtered' ? ($validated['filters'] ?? []) : [];
+
+        $scope = $this->resolveScopeForPermissions(
+            $user,
+            PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ALL,
+            PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ASSIGNED,
+        );
+
+        $counts = $this->computeBatchStatusCounts(
+            $scope,
+            $mode,
+            $targetClosed,
+            $admissionIds,
+            $filters,
+        );
+
+        if ((int) $validated['expected_will_change_count'] !== $counts['will_change_count']) {
+            return response()->json([
+                'message' => 'Batch preview is stale. Please preview and confirm again.',
+                'mode' => $mode,
+                'status' => $targetStatus,
+                'matched_count' => $counts['matched_count'],
+                'updated_count' => 0,
+                'already_target_count' => $counts['already_target_count'],
+                'inaccessible_count' => $counts['inaccessible_count'],
+                'audits_created' => 0,
+                'will_change_count' => $counts['will_change_count'],
+            ], 409);
+        }
+
+        [$updatedCount, $auditsCreated] = $this->performBatchStatusUpdate(
+            $scope,
+            $mode,
+            $targetClosed,
+            $admissionIds,
+            $filters,
+            (int) $user->id,
+            $validated['notes'] ?? null,
+        );
+
+        return response()->json([
+            'message' => 'Admission statuses updated',
+            'status' => $targetStatus,
+            'mode' => $mode,
+            'matched_count' => $counts['matched_count'],
+            'updated_count' => $updatedCount,
+            'already_target_count' => $counts['already_target_count'],
+            'inaccessible_count' => $counts['inaccessible_count'],
+            'audits_created' => $auditsCreated,
+        ]);
+    }
+
+    private function sanitizeStrokes(array $strokes): array
+    {
+        return collect($strokes)
             ->map(function ($stroke) {
                 $points = collect($stroke['points'] ?? [])
                     ->map(function ($point) {
@@ -318,110 +518,433 @@ class AdmissionController extends Controller
             ->filter()
             ->values()
             ->all();
-        $form->Strokes = $sanitizedStrokes;
-        $form->FormVersion = $request->FormVersion ?? 'v1';
-        $form->Status = $request->Status ?? 'draft';
-        
-        // Force save
-        $form->save();
-    
-        return response()->json([
-            'Form' => $form->fresh(), // Refresh to get the actual saved data
-        ]);
     }
 
-    public function uploadAttachment(int $id, UploadAttachmentRequest $request): JsonResponse
+    private function buildHistoryPayload(User $user, AdmissionFile $admission): Collection
     {
-        /** @var \App\Models\Doctor $doctor */
-        $doctor = $request->user();
+        $historyQuery = AdmissionFile::query()
+            ->with('doctor')
+            ->where('PatientId', $admission->PatientId)
+            ->withNonNullWorksDoctor();
 
-        $admission = AdmissionFile::findOrFail($id);
-
-        if ($admission->DoctorId !== $doctor->Id) {
-            return response()->json(['message' => 'Forbidden'], 403);
+        if (!$user->can(PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ALL)) {
+            $doctorId = $this->requireLinkedDoctorId($user);
+            $historyQuery->assignedToDoctorViaWorks($doctorId);
         }
 
-        if ($admission->Closed) {
-            return response()->json(['message' => 'Admission is closed'], 403);
-        }
+        /** @var EloquentCollection<int, AdmissionFile> $historyRecords */
+        $historyRecords = $historyQuery
+            ->orderBy('AdmDate', 'desc')
+            ->get();
 
-        Log::info('Admission attachment upload requested', [
-            'doctor_id' => $doctor->Id,
-            'admission_id' => $admission->Id,
-            'has_file' => $request->hasFile('File'),
-        ]);
+        $legacyLookupIds = $historyRecords->pluck('Id')->push($admission->Id)->unique()->filter()->all();
+        $historyPatientIds = $historyRecords->pluck('PatientId')->push($admission->PatientId)->unique()->filter()->all();
+        $historyAdmissionIds = collect($legacyLookupIds)
+            ->map(fn ($value) => (int) $value)
+            ->values();
 
-        try {
-            $file = $request->file('File');
-            $Path = Storage::disk('public')->putFile('admissions', $file);
+        $legacyDocumentsByAdmission = TblDocument::query()
+            ->whereIn('AdmNb', $legacyLookupIds)
+            ->get()
+            ->groupBy('AdmNb');
 
-            $attachment = AdmissionAttachment::create([
-                'DoctorId' => $doctor->Id,
-                'AdmissionId' => $admission->Id,
-                'Path' => $Path,
-                'Mime' => $file->getClientMimeType(),
-                'Label' => $request->Label,
-                'UploadedAt' => now(),
-            ]);
+        $legacyDocumentsByPatient = empty($historyPatientIds)
+            ? collect()
+            : TblDocument::query()
+                ->whereIn('MRN', $historyPatientIds)
+                ->get()
+                ->groupBy('MRN');
 
-            $attachmentData = [
-                'id' => $attachment->getKey(),
-                'Path' => $attachment->Path,
-                'Url' => Storage::url($attachment->Path),
-                'Label' => $attachment->Label,
-                'UploadedAt' => optional($attachment->UploadedAt)->toDateTimeString(),
+        $historyAdmissions = $historyRecords->map(function (AdmissionFile $record) use ($legacyDocumentsByAdmission) {
+            $legacyTump = ($legacyDocumentsByAdmission->get($record->Id) ?? collect())
+                ->map(fn (TblDocument $doc) => $this->toLegacyPreviewDataUri($doc))
+                ->values()
+                ->all();
+
+            return [
+                'id' => $record->Id,
+                'admissionNumber' => (int) $record->Id,
+                'historyType' => 'admission',
+                'admDate' => optional($record->AdmDate)->toDateTimeString(),
+                'status' => $record->Closed ? 'closed' : 'open',
+                'doctorId' => $record->DoctorId,
+                'doctorName' => optional($record->doctor)->FullName,
+                'legacyTump' => $legacyTump,
+                'legacyDocumentId' => null,
             ];
+        });
 
-            Log::info('Admission attachment uploaded', [
-                'attachment_id' => $attachment->getKey(),
-                'doctor_id' => $doctor->Id,
-                'admission_id' => $admission->Id,
-                'path' => $attachment->Path,
-            ]);
+        $legacyOnlyHistory = ($legacyDocumentsByPatient->get($admission->PatientId) ?? collect())
+            ->filter(function (TblDocument $doc) use ($historyAdmissionIds) {
+                if ($doc->AdmNb === null) {
+                    return true;
+                }
 
-            return response()->json([
-                'Attachment' => $attachmentData,
-            ]);
-        } catch (\Throwable $error) {
-            Log::error('Admission attachment upload failed', [
-                'doctor_id' => $doctor->Id,
-                'admission_id' => $admission->Id,
-                'error' => $error->getMessage(),
-                'trace' => $error->getTraceAsString(),
-            ]);
+                return !$historyAdmissionIds->contains((int) $doc->AdmNb);
+            })
+            ->map(function (TblDocument $doc) {
+                return [
+                    'id' => null,
+                    'admissionNumber' => $doc->AdmNb !== null ? (int) $doc->AdmNb : null,
+                    'historyType' => 'legacy',
+                    'admDate' => optional($doc->Date)->toDateTimeString(),
+                    'status' => 'legacy',
+                    'doctorId' => null,
+                    'doctorName' => null,
+                    'legacyTump' => [$this->toLegacyPreviewDataUri($doc)],
+                    'legacyDocumentId' => (int) $doc->Id,
+                ];
+            });
 
-            return response()->json(['message' => 'Unable to upload attachment'], 500);
-        }
-
+        return $historyAdmissions
+            ->merge($legacyOnlyHistory)
+            ->sortByDesc(fn (array $item) => $item['admDate'] ?? '0000-00-00 00:00:00')
+            ->values();
     }
 
-    public function deleteAttachment(int $id, int $attachmentId, Request $request): JsonResponse
+    private function resolveScopeForPermissions(User $user, string $allPermission, string $assignedPermission): array
     {
-        /** @var \App\Models\Doctor $doctor */
-        $doctor = $request->user();
-
-        $admission = AdmissionFile::findOrFail($id);
-
-        if ($admission->DoctorId !== $doctor->Id) {
-            return response()->json(['message' => 'Forbidden'], 403);
+        if ($user->can($allPermission)) {
+            return [
+                'mode' => 'all',
+                'doctor_id' => null,
+            ];
         }
 
-        if ($admission->Closed) {
-            return response()->json(['message' => 'Admission is closed'], 403);
+        if ($user->can($assignedPermission)) {
+            return [
+                'mode' => 'assigned',
+                'doctor_id' => $this->requireLinkedDoctorId($user),
+            ];
         }
 
-        $attachment = AdmissionAttachment::findOrFail($attachmentId);
+        abort(403, 'Forbidden');
+    }
 
-        if ($attachment->AdmissionId !== $admission->Id) {
-            return response()->json(['message' => 'Forbidden'], 403);
+    private function resolveAdmissionByPermission(
+        User $user,
+        int $admissionId,
+        string $allPermission,
+        string $assignedPermission,
+        array $with = []
+    ): AdmissionFile {
+        $scope = $this->resolveScopeForPermissions($user, $allPermission, $assignedPermission);
+
+        $query = AdmissionFile::query()
+            ->where('Id', $admissionId)
+            ->with($with)
+            ->tap(fn (Builder $builder) => $this->applyAdmissionScope($builder, $scope));
+
+        return $query->firstOrFail();
+    }
+
+    private function applyAdmissionScope(Builder $query, array $scope): Builder
+    {
+        if (($scope['mode'] ?? null) === 'all') {
+            return $query->withNonNullWorksDoctor();
         }
 
-        if (Storage::disk('public')->exists($attachment->Path)) {
-            Storage::disk('public')->delete($attachment->Path);
+        return $query->assignedToDoctorViaWorks((int) ($scope['doctor_id'] ?? 0));
+    }
+
+    private function applyAdmissionListFilters(Builder $query, array $filters): Builder
+    {
+        $startDate = isset($filters['start_date']) ? trim((string) $filters['start_date']) : '';
+        if ($startDate !== '') {
+            $query->where('AdmDate', '>=', $startDate);
         }
 
-        $attachment->delete();
+        $endDate = isset($filters['end_date']) ? trim((string) $filters['end_date']) : '';
+        if ($endDate !== '') {
+            $query->where('AdmDate', '<=', $endDate);
+        }
 
-        return response()->json(['message' => 'Deleted']);
+        $status = isset($filters['status']) ? strtolower(trim((string) $filters['status'])) : '';
+        if ($status === 'closed') {
+            $query->where('Closed', 1);
+        } elseif ($status === 'open') {
+            $query->where('Closed', 0);
+        }
+
+        $patient = isset($filters['patient']) ? trim((string) $filters['patient']) : '';
+        if ($patient !== '') {
+            $like = '%' . $patient . '%';
+            $query->whereHas('patient', function (Builder $patientQuery) use ($like) {
+                $patientQuery->where(function (Builder $innerQuery) use ($like) {
+                    $innerQuery
+                        ->where('First', 'like', $like)
+                        ->orWhere('Middle', 'like', $like)
+                        ->orWhere('Last', 'like', $like)
+                        ->orWhere('ArabicName', 'like', $like)
+                        ->orWhere('Phone', 'like', $like);
+                });
+            });
+        }
+
+        return $query;
+    }
+
+    private function canBatchUpdateStatus(User $user): bool
+    {
+        return $user->can(PermissionCatalog::ADMISSIONS_STATUS_UPDATE)
+            && $user->can(PermissionCatalog::ADMISSIONS_STATUS_UPDATE_BATCH);
+    }
+
+    private function buildBatchStatusBaseQuery(
+        array $scope,
+        string $mode,
+        array $admissionIds,
+        array $filters
+    ): Builder {
+        $query = AdmissionFile::query()
+            ->tap(fn (Builder $builder) => $this->applyAdmissionScope($builder, $scope));
+
+        if ($mode === 'selected') {
+            if (empty($admissionIds)) {
+                return $query->whereRaw('1 = 0');
+            }
+
+            return $query->whereIn('Id', $admissionIds);
+        }
+
+        return $this->applyAdmissionListFilters($query, $filters);
+    }
+
+    private function computeBatchStatusCounts(
+        array $scope,
+        string $mode,
+        bool $targetClosed,
+        array $admissionIds,
+        array $filters
+    ): array {
+        $baseQuery = $this->buildBatchStatusBaseQuery($scope, $mode, $admissionIds, $filters);
+
+        $matchedCount = (clone $baseQuery)->count();
+        $willChangeCount = (clone $baseQuery)->where('Closed', $targetClosed ? 0 : 1)->count();
+
+        return [
+            'matched_count' => (int) $matchedCount,
+            'will_change_count' => (int) $willChangeCount,
+            'already_target_count' => max(0, (int) $matchedCount - (int) $willChangeCount),
+            'inaccessible_count' => $mode === 'selected'
+                ? max(0, count($admissionIds) - (int) $matchedCount)
+                : 0,
+        ];
+    }
+
+    private function performBatchStatusUpdate(
+        array $scope,
+        string $mode,
+        bool $targetClosed,
+        array $admissionIds,
+        array $filters,
+        int $userId,
+        ?string $notes
+    ): array {
+        $updatedCount = 0;
+        $auditsCreated = 0;
+        $targetValue = $targetClosed ? 1 : 0;
+
+        $this->buildBatchStatusBaseQuery($scope, $mode, $admissionIds, $filters)
+            ->where('Closed', $targetClosed ? 0 : 1)
+            ->orderBy('Id')
+            ->chunkById(200, function (EloquentCollection $chunk) use (
+                &$updatedCount,
+                &$auditsCreated,
+                $targetValue,
+                $targetClosed,
+                $userId,
+                $notes
+            ) {
+                if ($chunk->isEmpty()) {
+                    return;
+                }
+
+                $chunkIds = $chunk->pluck('Id')->map(fn ($id) => (int) $id)->values()->all();
+
+                if (empty($chunkIds)) {
+                    return;
+                }
+
+                AdmissionFile::query()
+                    ->whereIn('Id', $chunkIds)
+                    ->update(['Closed' => $targetValue]);
+
+                $now = now();
+                $auditRows = $chunk
+                    ->map(function (AdmissionFile $admission) use ($targetClosed, $userId, $notes, $now) {
+                        return [
+                            'admission_id' => (int) $admission->Id,
+                            'old_status' => $admission->Closed ? 'closed' : 'open',
+                            'new_status' => $targetClosed ? 'closed' : 'open',
+                            'changed_by_user_id' => $userId,
+                            'notes' => $notes,
+                            'created_at' => $now,
+                            'updated_at' => $now,
+                        ];
+                    })
+                    ->values()
+                    ->all();
+
+                if (!empty($auditRows)) {
+                    AdmissionStatusAudit::query()->insert($auditRows);
+                }
+
+                $updatedCount += count($chunkIds);
+                $auditsCreated += count($auditRows);
+            }, 'Id', 'Id');
+
+        return [$updatedCount, $auditsCreated];
+    }
+
+    private function buildBatchSelectionSummary(string $mode, array $admissionIds, array $filters): string
+    {
+        if ($mode === 'selected') {
+            $count = count($admissionIds);
+            return $count === 1
+                ? 'Selected scope: 1 admission.'
+                : sprintf('Selected scope: %d admissions.', $count);
+        }
+
+        $parts = [];
+
+        $status = isset($filters['status']) ? strtolower(trim((string) $filters['status'])) : '';
+        if ($status !== '') {
+            $parts[] = "status = {$status}";
+        }
+
+        $startDate = isset($filters['start_date']) ? trim((string) $filters['start_date']) : '';
+        if ($startDate !== '') {
+            $parts[] = "start date >= {$startDate}";
+        }
+
+        $endDate = isset($filters['end_date']) ? trim((string) $filters['end_date']) : '';
+        if ($endDate !== '') {
+            $parts[] = "end date <= {$endDate}";
+        }
+
+        $patient = isset($filters['patient']) ? trim((string) $filters['patient']) : '';
+        if ($patient !== '') {
+            $parts[] = "patient contains \"{$patient}\"";
+        }
+
+        if (empty($parts)) {
+            return 'Filtered scope: all accessible admissions (no extra filters).';
+        }
+
+        return 'Filtered scope: ' . implode(', ', $parts) . '.';
+    }
+
+    private function buildAssignedLookupForUser(User $user, Collection $admissionIds): array
+    {
+        if ($admissionIds->isEmpty() || !$user->doctor_id) {
+            return [];
+        }
+
+        $ids = AdmissionFile::query()
+            ->whereIn('Id', $admissionIds->all())
+            ->assignedToDoctorViaWorks((int) $user->doctor_id)
+            ->pluck('Id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        return array_fill_keys($ids, true);
+    }
+
+    private function isAdmissionAssignedToUser(User $user, int $admissionId): bool
+    {
+        if (!$user->doctor_id) {
+            return false;
+        }
+
+        return AdmissionFile::query()
+            ->where('Id', $admissionId)
+            ->assignedToDoctorViaWorks((int) $user->doctor_id)
+            ->exists();
+    }
+
+    private function requireLinkedDoctorId(User $user): int
+    {
+        if (!$user->doctor_id) {
+            abort(403, 'Doctor link is required for this action.');
+        }
+
+        return (int) $user->doctor_id;
+    }
+
+    private function hasLegacyDocuments(int $admissionId): bool
+    {
+        return TblDocument::query()->where('AdmNb', $admissionId)->exists();
+    }
+
+    private function buildAdmissionActions(
+        User $user,
+        bool $isAssignedToUser,
+        bool $isClosed,
+        bool $hasLegacyDocuments
+    ): array {
+        $canView = $user->can(PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ALL)
+            || ($user->can(PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ASSIGNED) && $isAssignedToUser);
+
+        $canEditForm = !$isClosed
+            && !$hasLegacyDocuments
+            && (
+                $user->can(PermissionCatalog::ADMISSIONS_FORM_EDIT_ALL)
+                || ($user->can(PermissionCatalog::ADMISSIONS_FORM_EDIT_ASSIGNED) && $isAssignedToUser)
+            );
+
+        $canManageAttachments = !$isClosed
+            && !$hasLegacyDocuments
+            && (
+                $user->can(PermissionCatalog::ADMISSIONS_ATTACHMENTS_MANAGE_ALL)
+                || ($user->can(PermissionCatalog::ADMISSIONS_ATTACHMENTS_MANAGE_ASSIGNED) && $isAssignedToUser)
+            );
+
+        $canChangeStatus = $user->can(PermissionCatalog::ADMISSIONS_STATUS_UPDATE)
+            && (
+                $user->can(PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ALL)
+                || ($user->can(PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ASSIGNED) && $isAssignedToUser)
+            );
+
+        $canViewHistory = $canView && $user->can(PermissionCatalog::ADMISSIONS_HISTORY_VIEW);
+
+        return [
+            'canView' => $canView,
+            'canEditForm' => $canEditForm,
+            'canManageAttachments' => $canManageAttachments,
+            'canChangeStatus' => $canChangeStatus,
+            'canViewHistory' => $canViewHistory,
+        ];
+    }
+
+    private function toLegacyImageDataUri($value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        if (is_resource($value)) {
+            $value = stream_get_contents($value);
+        }
+
+        if (!is_string($value) || $value === '') {
+            return null;
+        }
+
+        return 'data:image/jpeg;base64,' . base64_encode($value);
+    }
+
+    private function toLegacyDocumentDataUri(TblDocument $document): string
+    {
+        return $this->toLegacyImageDataUri($document->Document)
+            ?? $this->toLegacyImageDataUri($document->Tump)
+            ?? self::LEGACY_PLACEHOLDER_DATA_URI;
+    }
+
+    private function toLegacyPreviewDataUri(TblDocument $document): string
+    {
+        return $this->toLegacyImageDataUri($document->Document)
+            ?? $this->toLegacyImageDataUri($document->Tump)
+            ?? self::LEGACY_PLACEHOLDER_DATA_URI;
     }
 }

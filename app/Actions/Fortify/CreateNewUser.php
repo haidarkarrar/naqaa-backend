@@ -3,6 +3,7 @@
 namespace App\Actions\Fortify;
 
 use App\Models\User;
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 use Laravel\Fortify\Contracts\CreatesNewUsers;
@@ -30,10 +31,24 @@ class CreateNewUser implements CreatesNewUsers
             'password' => $this->passwordRules(),
         ])->validate();
 
+        $username = Str::slug($input['name'], '_');
+        if ($username === '') {
+            $username = 'user';
+        }
+
+        $candidate = $username;
+        $suffix = 1;
+        while (User::query()->where('username', $candidate)->exists()) {
+            $candidate = "{$username}_{$suffix}";
+            $suffix++;
+        }
+
         return User::create([
-            'name' => $input['name'],
+            'username' => $candidate,
+            'display_name' => $input['name'],
             'email' => $input['email'],
             'password' => $input['password'],
+            'is_active' => true,
         ]);
     }
 }

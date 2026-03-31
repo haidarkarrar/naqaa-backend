@@ -14,12 +14,14 @@ class AdmissionAttachment extends Model
     protected $casts = [
         'Id' => 'integer',
         'DoctorId' => 'integer',
+        'UploadedByUserId' => 'integer',
         'AdmissionId' => 'integer',
         'UploadedAt' => 'datetime',
     ];
 
     protected $fillable = [
         'DoctorId',
+        'UploadedByUserId',
         'AdmissionId',
         'Path',
         'Mime',

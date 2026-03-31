@@ -8,13 +8,9 @@ return new class extends Migration
 {
     public function up(): void
     {
-        if (Schema::connection('naqaa')->hasTable('doctor_refresh_tokens')) {
-            return;
-        }
-
-        Schema::connection('naqaa')->create('doctor_refresh_tokens', function (Blueprint $table) {
+        Schema::connection('naqaa')->create('user_refresh_tokens', function (Blueprint $table) {
             $table->increments('Id');
-            $table->unsignedBigInteger('DoctorId');
+            $table->unsignedBigInteger('UserId');
             $table->string('DeviceId', 128);
             $table->string('TokenHash', 64)->unique();
             $table->timestamp('ExpiresAt')->nullable();
@@ -26,12 +22,13 @@ return new class extends Migration
             $table->timestamp('UpdatedAt')->nullable();
 
             $table->index('DeviceId');
-            $table->index('DoctorId');
+            $table->index('UserId');
         });
     }
 
     public function down(): void
     {
-        Schema::connection('naqaa')->dropIfExists('doctor_refresh_tokens');
+        Schema::connection('naqaa')->dropIfExists('user_refresh_tokens');
     }
 };
+

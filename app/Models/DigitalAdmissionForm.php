@@ -16,6 +16,7 @@ class DigitalAdmissionForm extends Model
 
     protected $fillable = [
         'DoctorId',
+        'UpdatedByUserId',
         'AdmissionId',
         'Payload',
         'Strokes',
@@ -26,6 +27,7 @@ class DigitalAdmissionForm extends Model
     protected $casts = [
         'Id' => 'integer',
         'DoctorId' => 'integer',
+        'UpdatedByUserId' => 'integer',
         'AdmissionId' => 'integer',
         'Payload' => 'array',
         'Strokes' => 'array',
