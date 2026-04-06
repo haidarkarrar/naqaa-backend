@@ -22,6 +22,7 @@ Route::middleware([AuthenticateApiUser::class])->group(function () {
 
     Route::get('admissions', [AdmissionController::class, 'index']);
     Route::get('admissions/{id}', [AdmissionController::class, 'show']);
+    Route::patch('admissions/{id}/patient', [AdmissionController::class, 'updatePatient']);
     Route::post('admissions/{id}/form', [AdmissionController::class, 'saveForm']);
     Route::post('admissions/{id}/attachments', [AdmissionController::class, 'uploadAttachment']);
     Route::delete('admissions/{id}/attachments/{attachmentId}', [AdmissionController::class, 'deleteAttachment']);

@@ -22,10 +22,11 @@ class BatchUpdateAdmissionStatusRequest extends FormRequest
             'filters.status' => ['sometimes', 'string', 'in:open,closed'],
             'filters.start_date' => ['sometimes', 'date_format:Y-m-d'],
             'filters.end_date' => ['sometimes', 'date_format:Y-m-d', 'after_or_equal:filters.start_date'],
+            'filters.start_at' => ['sometimes', 'date'],
+            'filters.end_before' => ['sometimes', 'date'],
             'filters.patient' => ['sometimes', 'string', 'max:255'],
             'notes' => ['sometimes', 'nullable', 'string', 'max:1000'],
             'expected_will_change_count' => ['required', 'integer', 'min:0'],
         ];
     }
 }
-

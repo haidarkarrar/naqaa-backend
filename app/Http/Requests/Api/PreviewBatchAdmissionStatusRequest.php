@@ -22,8 +22,9 @@ class PreviewBatchAdmissionStatusRequest extends FormRequest
             'filters.status' => ['sometimes', 'string', 'in:open,closed'],
             'filters.start_date' => ['sometimes', 'date_format:Y-m-d'],
             'filters.end_date' => ['sometimes', 'date_format:Y-m-d', 'after_or_equal:filters.start_date'],
+            'filters.start_at' => ['sometimes', 'date'],
+            'filters.end_before' => ['sometimes', 'date'],
             'filters.patient' => ['sometimes', 'string', 'max:255'],
         ];
     }
 }
-

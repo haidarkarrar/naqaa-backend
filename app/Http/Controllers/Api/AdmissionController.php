@@ -2,16 +2,19 @@
 
 namespace App\Http\Controllers\Api;
 
+use Carbon\CarbonImmutable;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\BatchUpdateAdmissionStatusRequest;
 use App\Http\Requests\Api\PreviewBatchAdmissionStatusRequest;
 use App\Http\Requests\Api\SaveDigitalFormRequest;
+use App\Http\Requests\Api\UpdateAdmissionPatientRequest;
 use App\Http\Requests\Api\UpdateAdmissionStatusRequest;
 use App\Http\Requests\Api\UploadAttachmentRequest;
 use App\Models\AdmissionAttachment;
 use App\Models\AdmissionFile;
 use App\Models\AdmissionStatusAudit;
 use App\Models\DigitalAdmissionForm;
+use App\Models\Patient;
 use App\Models\TblDocument;
 use App\Models\User;
 use App\Support\PermissionCatalog;
@@ -52,6 +55,8 @@ class AdmissionController extends Controller
                 'status' => $request->query('status'),
                 'start_date' => $request->query('start_date'),
                 'end_date' => $request->query('end_date'),
+                'start_at' => $request->query('start_at'),
+                'end_before' => $request->query('end_before'),
                 'patient' => $request->query('patient'),
             ]))
             ->orderBy('AdmDate', 'desc');
@@ -84,7 +89,7 @@ class AdmissionController extends Controller
             return [
                 'id' => $admission->Id,
                 'Patient' => "{$admission->Patient?->First} {$admission->Patient?->Last}",
-                'AdmDate' => optional($admission->AdmDate)->toDateTimeString(),
+                'AdmDate' => $this->serializeUtcDateTime($admission->AdmDate),
                 'Status' => $admission->Closed ? 'closed' : 'open',
                 'LegacyTump' => $legacyTump,
                 ...$actions,
@@ -149,7 +154,7 @@ class AdmissionController extends Controller
                         'Path' => $attachment->Path,
                         'Url' => Storage::url($attachment->Path),
                         'Label' => $attachment->Label,
-                        'UploadedAt' => optional($attachment->UploadedAt)->toDateTimeString(),
+                        'UploadedAt' => $this->serializeUtcDateTime($attachment->UploadedAt),
                     ];
                 });
 
@@ -161,8 +166,8 @@ class AdmissionController extends Controller
             );
 
             return response()->json([
-                'Admission' => $admission,
-                'Patient' => $admission->Patient,
+                'Admission' => $this->serializeAdmission($admission),
+                'Patient' => $this->serializePatient($admission->patient ?? $admission->Patient),
                 'History' => $history,
                 'DigitalForm' => $admission->DigitalForm,
                 'LegacyDocuments' => $legacyDocumentsForAdmission,
@@ -180,6 +185,43 @@ class AdmissionController extends Controller
             ]);
             throw $e;
         }
+    }
+
+    public function updatePatient(int $id, UpdateAdmissionPatientRequest $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        if (!$user->can(PermissionCatalog::ADMISSIONS_PATIENT_EDIT)) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $admission = $this->resolveAdmissionByPermission(
+            $user,
+            $id,
+            PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ALL,
+            PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ASSIGNED,
+            ['patient']
+        );
+
+        /** @var Patient|null $patient */
+        $patient = $admission->patient;
+        if (!$patient) {
+            return response()->json(['message' => 'Patient not found'], 404);
+        }
+
+        $validated = $request->validated();
+        if (array_key_exists('DOB', $validated) && $validated['DOB']) {
+            $validated['DOB'] = CarbonImmutable::parse($validated['DOB'])->toDateString();
+        }
+
+        $patient->fill($validated);
+        $patient->save();
+
+        return response()->json([
+            'message' => 'Patient info updated',
+            'patient' => $this->serializePatient($patient->fresh()),
+        ]);
     }
 
     public function saveForm(int $id, SaveDigitalFormRequest $request): JsonResponse
@@ -269,7 +311,7 @@ class AdmissionController extends Controller
                     'Path' => $attachment->Path,
                     'Url' => Storage::url($attachment->Path),
                     'Label' => $attachment->Label,
-                    'UploadedAt' => optional($attachment->UploadedAt)->toDateTimeString(),
+                    'UploadedAt' => $this->serializeUtcDateTime($attachment->UploadedAt),
                 ],
             ]);
         } catch (\Throwable $error) {
@@ -565,7 +607,7 @@ class AdmissionController extends Controller
                 'id' => $record->Id,
                 'admissionNumber' => (int) $record->Id,
                 'historyType' => 'admission',
-                'admDate' => optional($record->AdmDate)->toDateTimeString(),
+                'admDate' => $this->serializeUtcDateTime($record->AdmDate),
                 'status' => $record->Closed ? 'closed' : 'open',
                 'doctorId' => $record->DoctorId,
                 'doctorName' => optional($record->doctor)->FullName,
@@ -587,7 +629,7 @@ class AdmissionController extends Controller
                     'id' => null,
                     'admissionNumber' => $doc->AdmNb !== null ? (int) $doc->AdmNb : null,
                     'historyType' => 'legacy',
-                    'admDate' => optional($doc->Date)->toDateTimeString(),
+                    'admDate' => $this->serializeUtcDateTime($doc->Date),
                     'status' => 'legacy',
                     'doctorId' => null,
                     'doctorName' => null,
@@ -649,14 +691,14 @@ class AdmissionController extends Controller
 
     private function applyAdmissionListFilters(Builder $query, array $filters): Builder
     {
-        $startDate = isset($filters['start_date']) ? trim((string) $filters['start_date']) : '';
-        if ($startDate !== '') {
-            $query->where('AdmDate', '>=', $startDate);
+        $startAt = $this->normalizeUtcFilterBoundary($filters['start_at'] ?? null);
+        if ($startAt !== null) {
+            $query->where('AdmDate', '>=', $startAt);
         }
 
-        $endDate = isset($filters['end_date']) ? trim((string) $filters['end_date']) : '';
-        if ($endDate !== '') {
-            $query->where('AdmDate', '<=', $endDate);
+        $endBefore = $this->normalizeUtcFilterBoundary($filters['end_before'] ?? null);
+        if ($endBefore !== null) {
+            $query->where('AdmDate', '<', $endBefore);
         }
 
         $status = isset($filters['status']) ? strtolower(trim((string) $filters['status'])) : '';
@@ -682,6 +724,50 @@ class AdmissionController extends Controller
         }
 
         return $query;
+    }
+
+    private function normalizeUtcFilterBoundary(mixed $value): ?string
+    {
+        $boundary = trim((string) $value);
+        if ($boundary === '') {
+            return null;
+        }
+
+        try {
+            return CarbonImmutable::parse($boundary)->utc()->format('Y-m-d H:i:s.u');
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function serializeAdmission(AdmissionFile $admission): array
+    {
+        $payload = $admission->attributesToArray();
+        $payload['AdmDate'] = $this->serializeUtcDateTime($admission->AdmDate);
+
+        return $payload;
+    }
+
+    private function serializePatient(?Patient $patient): ?array
+    {
+        if (!$patient) {
+            return null;
+        }
+
+        return $patient->attributesToArray();
+    }
+
+    private function serializeUtcDateTime(mixed $value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        try {
+            return CarbonImmutable::parse($value)->utc()->format('Y-m-d\TH:i:s\Z');
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     private function canBatchUpdateStatus(User $user): bool
@@ -900,6 +986,8 @@ class AdmissionController extends Controller
                 || ($user->can(PermissionCatalog::ADMISSIONS_ATTACHMENTS_MANAGE_ASSIGNED) && $isAssignedToUser)
             );
 
+        $canEditPatientInfo = $user->can(PermissionCatalog::ADMISSIONS_PATIENT_EDIT) && $canView;
+
         $canChangeStatus = $user->can(PermissionCatalog::ADMISSIONS_STATUS_UPDATE)
             && (
                 $user->can(PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ALL)
@@ -911,6 +999,7 @@ class AdmissionController extends Controller
         return [
             'canView' => $canView,
             'canEditForm' => $canEditForm,
+            'canEditPatientInfo' => $canEditPatientInfo,
             'canManageAttachments' => $canManageAttachments,
             'canChangeStatus' => $canChangeStatus,
             'canViewHistory' => $canViewHistory,
