@@ -416,7 +416,13 @@ class AdmissionController extends Controller
         $admissionIds = $mode === 'selected'
             ? collect($validated['admission_ids'] ?? [])->map(fn ($id) => (int) $id)->unique()->values()->all()
             : [];
-        $filters = $mode === 'filtered' ? ($validated['filters'] ?? []) : [];
+        $scopeType = $mode === 'scope' ? (string) ($validated['scope_type'] ?? 'all') : null;
+        $scopeFilters = $scopeType === 'date_range'
+            ? [
+                'start_at' => $validated['start_at'] ?? null,
+                'end_before' => $validated['end_before'] ?? null,
+            ]
+            : [];
 
         $scope = $this->resolveScopeForPermissions(
             $user,
@@ -429,7 +435,8 @@ class AdmissionController extends Controller
             $mode,
             $targetClosed,
             $admissionIds,
-            $filters,
+            $scopeType,
+            $scopeFilters,
         );
 
         return response()->json([
@@ -439,7 +446,7 @@ class AdmissionController extends Controller
             'will_change_count' => $counts['will_change_count'],
             'already_target_count' => $counts['already_target_count'],
             'inaccessible_count' => $counts['inaccessible_count'],
-            'selection_summary' => $this->buildBatchSelectionSummary($mode, $admissionIds, $filters),
+            'selection_summary' => $this->buildBatchSelectionSummary($mode, $admissionIds, $scopeType, $scopeFilters),
         ]);
     }
 
@@ -459,7 +466,13 @@ class AdmissionController extends Controller
         $admissionIds = $mode === 'selected'
             ? collect($validated['admission_ids'] ?? [])->map(fn ($id) => (int) $id)->unique()->values()->all()
             : [];
-        $filters = $mode === 'filtered' ? ($validated['filters'] ?? []) : [];
+        $scopeType = $mode === 'scope' ? (string) ($validated['scope_type'] ?? 'all') : null;
+        $scopeFilters = $scopeType === 'date_range'
+            ? [
+                'start_at' => $validated['start_at'] ?? null,
+                'end_before' => $validated['end_before'] ?? null,
+            ]
+            : [];
 
         $scope = $this->resolveScopeForPermissions(
             $user,
@@ -472,7 +485,8 @@ class AdmissionController extends Controller
             $mode,
             $targetClosed,
             $admissionIds,
-            $filters,
+            $scopeType,
+            $scopeFilters,
         );
 
         if ((int) $validated['expected_will_change_count'] !== $counts['will_change_count']) {
@@ -494,7 +508,8 @@ class AdmissionController extends Controller
             $mode,
             $targetClosed,
             $admissionIds,
-            $filters,
+            $scopeType,
+            $scopeFilters,
             (int) $user->id,
             $validated['notes'] ?? null,
         );
@@ -780,7 +795,8 @@ class AdmissionController extends Controller
         array $scope,
         string $mode,
         array $admissionIds,
-        array $filters
+        ?string $scopeType,
+        array $scopeFilters
     ): Builder {
         $query = AdmissionFile::query()
             ->tap(fn (Builder $builder) => $this->applyAdmissionScope($builder, $scope));
@@ -793,7 +809,11 @@ class AdmissionController extends Controller
             return $query->whereIn('Id', $admissionIds);
         }
 
-        return $this->applyAdmissionListFilters($query, $filters);
+        if ($scopeType === 'date_range') {
+            return $this->applyAdmissionListFilters($query, $scopeFilters);
+        }
+
+        return $query;
     }
 
     private function computeBatchStatusCounts(
@@ -801,9 +821,10 @@ class AdmissionController extends Controller
         string $mode,
         bool $targetClosed,
         array $admissionIds,
-        array $filters
+        ?string $scopeType,
+        array $scopeFilters
     ): array {
-        $baseQuery = $this->buildBatchStatusBaseQuery($scope, $mode, $admissionIds, $filters);
+        $baseQuery = $this->buildBatchStatusBaseQuery($scope, $mode, $admissionIds, $scopeType, $scopeFilters);
 
         $matchedCount = (clone $baseQuery)->count();
         $willChangeCount = (clone $baseQuery)->where('Closed', $targetClosed ? 0 : 1)->count();
@@ -823,7 +844,8 @@ class AdmissionController extends Controller
         string $mode,
         bool $targetClosed,
         array $admissionIds,
-        array $filters,
+        ?string $scopeType,
+        array $scopeFilters,
         int $userId,
         ?string $notes
     ): array {
@@ -831,7 +853,7 @@ class AdmissionController extends Controller
         $auditsCreated = 0;
         $targetValue = $targetClosed ? 1 : 0;
 
-        $this->buildBatchStatusBaseQuery($scope, $mode, $admissionIds, $filters)
+        $this->buildBatchStatusBaseQuery($scope, $mode, $admissionIds, $scopeType, $scopeFilters)
             ->where('Closed', $targetClosed ? 0 : 1)
             ->orderBy('Id')
             ->chunkById(200, function (EloquentCollection $chunk) use (
@@ -883,7 +905,7 @@ class AdmissionController extends Controller
         return [$updatedCount, $auditsCreated];
     }
 
-    private function buildBatchSelectionSummary(string $mode, array $admissionIds, array $filters): string
+    private function buildBatchSelectionSummary(string $mode, array $admissionIds, ?string $scopeType, array $scopeFilters): string
     {
         if ($mode === 'selected') {
             $count = count($admissionIds);
@@ -892,33 +914,18 @@ class AdmissionController extends Controller
                 : sprintf('Selected scope: %d admissions.', $count);
         }
 
-        $parts = [];
-
-        $status = isset($filters['status']) ? strtolower(trim((string) $filters['status'])) : '';
-        if ($status !== '') {
-            $parts[] = "status = {$status}";
+        if ($scopeType === 'all') {
+            return 'Scope: all accessible admissions.';
         }
 
-        $startDate = isset($filters['start_date']) ? trim((string) $filters['start_date']) : '';
-        if ($startDate !== '') {
-            $parts[] = "start date >= {$startDate}";
+        $startAt = $this->normalizeUtcFilterBoundary($scopeFilters['start_at'] ?? null);
+        $endBefore = $this->normalizeUtcFilterBoundary($scopeFilters['end_before'] ?? null);
+
+        if ($startAt !== null && $endBefore !== null) {
+            return sprintf('Scope: admissions from %s up to %s (UTC).', $startAt, $endBefore);
         }
 
-        $endDate = isset($filters['end_date']) ? trim((string) $filters['end_date']) : '';
-        if ($endDate !== '') {
-            $parts[] = "end date <= {$endDate}";
-        }
-
-        $patient = isset($filters['patient']) ? trim((string) $filters['patient']) : '';
-        if ($patient !== '') {
-            $parts[] = "patient contains \"{$patient}\"";
-        }
-
-        if (empty($parts)) {
-            return 'Filtered scope: all accessible admissions (no extra filters).';
-        }
-
-        return 'Filtered scope: ' . implode(', ', $parts) . '.';
+        return 'Scope: accessible admissions in the selected date range.';
     }
 
     private function buildAssignedLookupForUser(User $user, Collection $admissionIds): array

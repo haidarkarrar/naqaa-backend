@@ -14,17 +14,13 @@ class PreviewBatchAdmissionStatusRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'mode' => ['required', 'string', 'in:selected,filtered'],
+            'mode' => ['required', 'string', 'in:selected,scope'],
             'status' => ['required', 'string', 'in:open,closed'],
             'admission_ids' => ['required_if:mode,selected', 'prohibited_unless:mode,selected', 'array', 'min:1', 'max:500'],
             'admission_ids.*' => ['integer', 'distinct', 'min:1'],
-            'filters' => ['sometimes', 'prohibited_unless:mode,filtered', 'array'],
-            'filters.status' => ['sometimes', 'string', 'in:open,closed'],
-            'filters.start_date' => ['sometimes', 'date_format:Y-m-d'],
-            'filters.end_date' => ['sometimes', 'date_format:Y-m-d', 'after_or_equal:filters.start_date'],
-            'filters.start_at' => ['sometimes', 'date'],
-            'filters.end_before' => ['sometimes', 'date'],
-            'filters.patient' => ['sometimes', 'string', 'max:255'],
+            'scope_type' => ['required_if:mode,scope', 'prohibited_unless:mode,scope', 'string', 'in:date_range,all'],
+            'start_at' => ['required_if:scope_type,date_range', 'prohibited_unless:scope_type,date_range', 'date'],
+            'end_before' => ['required_if:scope_type,date_range', 'prohibited_unless:scope_type,date_range', 'date', 'after:start_at'],
         ];
     }
 }
