@@ -13,8 +13,11 @@ use App\Http\Requests\Api\UploadAttachmentRequest;
 use App\Models\AdmissionAttachment;
 use App\Models\AdmissionFile;
 use App\Models\AdmissionStatusAudit;
+use App\Models\CheckList;
+use App\Models\CheckListItem;
 use App\Models\DigitalAdmissionForm;
 use App\Models\Patient;
+use App\Models\PatientCheckedItem;
 use App\Models\TblDocument;
 use App\Models\User;
 use App\Support\PermissionCatalog;
@@ -23,6 +26,7 @@ use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -165,9 +169,12 @@ class AdmissionController extends Controller
                 !empty($legacyDocumentsForAdmission),
             );
 
+            $patient = $admission->patient ?? $admission->Patient;
+
             return response()->json([
                 'Admission' => $this->serializeAdmission($admission),
-                'Patient' => $this->serializePatient($admission->patient ?? $admission->Patient),
+                'Patient' => $this->serializePatient($patient),
+                'Checklists' => $patient ? $this->buildChecklistPayload((int) $patient->Id) : [],
                 'History' => $history,
                 'DigitalForm' => $admission->DigitalForm,
                 'LegacyDocuments' => $legacyDocumentsForAdmission,
@@ -211,16 +218,37 @@ class AdmissionController extends Controller
         }
 
         $validated = $request->validated();
+        $hasChecklistItemIds = array_key_exists('ChecklistItemIds', $validated);
+        $checklistItemIds = collect($validated['ChecklistItemIds'] ?? [])
+            ->map(fn ($itemId) => (int) $itemId)
+            ->unique()
+            ->values()
+            ->all();
+        unset($validated['ChecklistItemIds']);
+
         if (array_key_exists('DOB', $validated) && $validated['DOB']) {
             $validated['DOB'] = CarbonImmutable::parse($validated['DOB'])->toDateString();
         }
 
-        $patient->fill($validated);
-        $patient->save();
+        /** @var Patient $freshPatient */
+        $freshPatient = DB::connection('meditop')->transaction(function () use ($patient, $validated, $hasChecklistItemIds, $checklistItemIds) {
+            $patient->fill($validated);
+            $patient->save();
+
+            if ($hasChecklistItemIds) {
+                $this->syncPatientChecklistSelections((int) $patient->Id, $checklistItemIds);
+            }
+
+            /** @var Patient $refreshed */
+            $refreshed = $patient->fresh();
+
+            return $refreshed;
+        });
 
         return response()->json([
             'message' => 'Patient info updated',
-            'patient' => $this->serializePatient($patient->fresh()),
+            'patient' => $this->serializePatient($freshPatient),
+            'Checklists' => $this->buildChecklistPayload((int) $freshPatient->Id),
         ]);
     }
 
@@ -770,6 +798,108 @@ class AdmissionController extends Controller
         }
 
         return $patient->attributesToArray();
+    }
+
+    private function buildChecklistPayload(int $patientId): array
+    {
+        $checklists = CheckList::query()
+            ->with(['items' => fn ($query) => $query->orderBy('Id')])
+            ->orderBy('Id')
+            ->get();
+
+        if ($checklists->isEmpty()) {
+            return [];
+        }
+
+        $checkedItemLookup = PatientCheckedItem::query()
+            ->where('PatientId', $patientId)
+            ->pluck('ItemId')
+            ->mapWithKeys(fn ($itemId) => [(int) $itemId => true])
+            ->all();
+
+        return $checklists
+            ->map(function (CheckList $checklist) use ($checkedItemLookup) {
+                $checkedItems = $checklist->items
+                    ->filter(fn (CheckListItem $item) => isset($checkedItemLookup[(int) $item->Id]))
+                    ->values();
+
+                return [
+                    'Id' => (int) $checklist->Id,
+                    'Name' => $checklist->Name,
+                    'Items' => $checklist->items
+                        ->map(fn (CheckListItem $item) => [
+                            'Id' => (int) $item->Id,
+                            'Name' => $item->Name,
+                        ])
+                        ->values()
+                        ->all(),
+                    'CheckedItemIds' => $checkedItems
+                        ->pluck('Id')
+                        ->map(fn ($itemId) => (int) $itemId)
+                        ->values()
+                        ->all(),
+                    'CheckedItemNames' => $checkedItems
+                        ->pluck('Name')
+                        ->filter(fn ($name) => is_string($name) && $name !== '')
+                        ->values()
+                        ->all(),
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    private function syncPatientChecklistSelections(int $patientId, array $selectedItemIds): void
+    {
+        $selectedIds = collect($selectedItemIds)
+            ->map(fn ($itemId) => (int) $itemId)
+            ->unique()
+            ->values()
+            ->all();
+        $selectedLookup = array_fill_keys($selectedIds, true);
+
+        $currentRows = PatientCheckedItem::query()
+            ->where('PatientId', $patientId)
+            ->orderBy('Id')
+            ->get(['Id', 'ItemId']);
+
+        $rowIdsToDelete = [];
+        $existingSelectedIds = [];
+
+        foreach ($currentRows->groupBy(fn (PatientCheckedItem $row) => (int) $row->ItemId) as $itemId => $rowsForItem) {
+            $numericItemId = (int) $itemId;
+            if (!isset($selectedLookup[$numericItemId])) {
+                foreach ($rowsForItem as $row) {
+                    $rowIdsToDelete[] = (int) $row->Id;
+                }
+                continue;
+            }
+
+            $existingSelectedIds[] = $numericItemId;
+
+            foreach ($rowsForItem->slice(1) as $duplicateRow) {
+                $rowIdsToDelete[] = (int) $duplicateRow->Id;
+            }
+        }
+
+        if (!empty($rowIdsToDelete)) {
+            PatientCheckedItem::query()->whereIn('Id', $rowIdsToDelete)->delete();
+        }
+
+        $itemIdsToInsert = array_values(array_diff($selectedIds, array_unique($existingSelectedIds)));
+        if (empty($itemIdsToInsert)) {
+            return;
+        }
+
+        $now = now();
+        $rowsToInsert = array_map(fn (int $itemId) => [
+            'PatientId' => $patientId,
+            'ItemId' => $itemId,
+            'Date' => $now,
+            'Note' => null,
+        ], $itemIdsToInsert);
+
+        PatientCheckedItem::query()->insert($rowsToInsert);
     }
 
     private function serializeUtcDateTime(mixed $value): ?string

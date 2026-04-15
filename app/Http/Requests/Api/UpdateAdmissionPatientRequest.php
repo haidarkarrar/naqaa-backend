@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Api;
 
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class UpdateAdmissionPatientRequest extends FormRequest
 {
@@ -17,16 +18,13 @@ class UpdateAdmissionPatientRequest extends FormRequest
             'DOB' => ['sometimes', 'nullable', 'date'],
             'Mother' => ['sometimes', 'nullable', 'string', 'max:255'],
             'Phone' => ['sometimes', 'nullable', 'string', 'max:50'],
-            'Smoker' => ['sometimes', 'boolean'],
-            'Alcoholic' => ['sometimes', 'boolean'],
-            'Allergies' => ['sometimes', 'boolean'],
             'Diabetic' => ['sometimes', 'boolean'],
             'Pregnancy' => ['sometimes', 'boolean'],
             'CardiacFailure' => ['sometimes', 'boolean'],
             'RenalFailure' => ['sometimes', 'boolean'],
             'OtherDisease' => ['sometimes', 'boolean'],
-            'MedicalHistory' => ['sometimes', 'nullable', 'string'],
-            'SurgicalHistory' => ['sometimes', 'nullable', 'string'],
+            'ChecklistItemIds' => ['sometimes', 'array'],
+            'ChecklistItemIds.*' => ['integer', 'distinct', Rule::exists('meditop.TblCheckListItems', 'Id')],
         ];
     }
 }

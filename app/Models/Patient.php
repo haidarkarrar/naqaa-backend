@@ -36,11 +36,6 @@ class Patient extends Model
         'MaritalStatusId',
         'OFD',
         'MainDoctorId',
-        'Smoker',
-        'Alcoholic',
-        'MedicalHistory',
-        'SurgicalHistory',
-        'Allergies',
         'Diabetic',
         'Pregnancy',
         'CardiacFailure',
@@ -53,9 +48,6 @@ class Patient extends Model
         'GenderId' => 'integer',
         'MainDoctorId' => 'integer',
         'GuarantorId' => 'integer',
-        'Smoker' => 'boolean',
-        'Alcoholic' => 'boolean',
-        'Allergies' => 'boolean',
         'Diabetic' => 'boolean',
         'Pregnancy' => 'boolean',
         'CardiacFailure' => 'boolean',
@@ -66,5 +58,10 @@ class Patient extends Model
     public function admissions(): HasMany
     {
         return $this->hasMany(AdmissionFile::class, 'PatientId', 'Id');
+    }
+
+    public function checkedItems(): HasMany
+    {
+        return $this->hasMany(PatientCheckedItem::class, 'PatientId', 'Id');
     }
 }

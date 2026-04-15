@@ -119,6 +119,9 @@ class DevDatasetSeeder extends Seeder
 
         $this->insertIfNotExists($meditop, 'TblDoctors', $this->buildDoctors());
         $this->insertIfNotExists($meditop, 'TblPatients', $this->buildPatients($beirutToday, $doctorAssignments));
+        $this->insertIfNotExists($meditop, 'TblCheckLists', $this->buildChecklists());
+        $this->insertIfNotExists($meditop, 'TblCheckListItems', $this->buildChecklistItems());
+        $this->insertIfNotExists($meditop, 'TblPatientCheckedItems', $this->buildPatientCheckedItems($beirutToday));
         $this->insertIfNotExists($meditop, 'TblAdmFiles', $this->buildAdmissions($beirutToday, $doctorAssignments));
         $this->insertIfNotExists($meditop, 'tblWorks', $this->buildWorks($doctorAssignments));
         $this->seedLegacyDocuments($archive, $this->buildLegacyDocuments($beirutToday));
@@ -181,6 +184,99 @@ class DevDatasetSeeder extends Seeder
         return $records;
     }
 
+    private function buildChecklists(): array
+    {
+        return [
+            [
+                'Id' => 6001,
+                'Name' => 'Allergies',
+                'Description' => 'Common allergy history used in the dev dataset.',
+            ],
+            [
+                'Id' => 6002,
+                'Name' => 'Habits',
+                'Description' => 'Lifestyle and exposure items used in the dev dataset.',
+            ],
+            [
+                'Id' => 6003,
+                'Name' => 'Past Medical History',
+                'Description' => 'Representative chronic and prior medical conditions.',
+            ],
+            [
+                'Id' => 6004,
+                'Name' => 'Surgical History',
+                'Description' => 'Representative surgical history items for local testing.',
+            ],
+        ];
+    }
+
+    private function buildChecklistItems(): array
+    {
+        return [
+            ['Id' => 6101, 'CheckListId' => 6001, 'Name' => 'Penicillin', 'Description' => 'Penicillin allergy'],
+            ['Id' => 6102, 'CheckListId' => 6001, 'Name' => 'NSAIDs', 'Description' => 'NSAID allergy'],
+            ['Id' => 6103, 'CheckListId' => 6001, 'Name' => 'Seafood', 'Description' => 'Seafood allergy'],
+            ['Id' => 6104, 'CheckListId' => 6001, 'Name' => 'Latex', 'Description' => 'Latex allergy'],
+            ['Id' => 6201, 'CheckListId' => 6002, 'Name' => 'Smoker', 'Description' => 'Current smoker'],
+            ['Id' => 6202, 'CheckListId' => 6002, 'Name' => 'Alcohol use', 'Description' => 'Alcohol use history'],
+            ['Id' => 6203, 'CheckListId' => 6002, 'Name' => 'Shisha', 'Description' => 'Shisha use'],
+            ['Id' => 6204, 'CheckListId' => 6002, 'Name' => 'Occupational exposure', 'Description' => 'Exposure at work'],
+            ['Id' => 6301, 'CheckListId' => 6003, 'Name' => 'Asthma', 'Description' => 'History of asthma'],
+            ['Id' => 6302, 'CheckListId' => 6003, 'Name' => 'Hypertension', 'Description' => 'History of hypertension'],
+            ['Id' => 6303, 'CheckListId' => 6003, 'Name' => 'Ischemic heart disease', 'Description' => 'IHD history'],
+            ['Id' => 6304, 'CheckListId' => 6003, 'Name' => 'Epilepsy', 'Description' => 'History of epilepsy'],
+            ['Id' => 6305, 'CheckListId' => 6003, 'Name' => 'Thyroid disease', 'Description' => 'History of thyroid disease'],
+            ['Id' => 6401, 'CheckListId' => 6004, 'Name' => 'Appendectomy', 'Description' => 'Prior appendectomy'],
+            ['Id' => 6402, 'CheckListId' => 6004, 'Name' => 'C-section', 'Description' => 'Prior caesarean section'],
+            ['Id' => 6403, 'CheckListId' => 6004, 'Name' => 'Cholecystectomy', 'Description' => 'Prior cholecystectomy'],
+            ['Id' => 6404, 'CheckListId' => 6004, 'Name' => 'Orthopedic surgery', 'Description' => 'Prior orthopedic surgery'],
+        ];
+    }
+
+    private function buildPatientCheckedItems(CarbonImmutable $beirutToday): array
+    {
+        $selectionMap = [
+            2001 => [6101, 6301],
+            2002 => [6201, 6203],
+            2003 => [6302, 6401],
+            2004 => [6102, 6303, 6403],
+            2005 => [6202],
+            2006 => [6103, 6305],
+            2008 => [6204, 6404],
+            2010 => [6104, 6201, 6302],
+            2013 => [6301, 6304],
+            2015 => [6402],
+            2021 => [6101],
+            2022 => [6103, 6202],
+            2027 => [6201, 6302, 6401],
+            2033 => [6304],
+            2038 => [6102, 6404],
+            2041 => [6203, 6305],
+            2046 => [6104, 6204],
+        ];
+
+        $records = [];
+        $id = 6501;
+
+        foreach ($selectionMap as $patientId => $itemIds) {
+            foreach ($itemIds as $position => $itemId) {
+                $records[] = [
+                    'Id' => $id++,
+                    'PatientId' => $patientId,
+                    'ItemId' => $itemId,
+                    'Date' => $beirutToday
+                        ->subDays(($patientId + $position) % 14)
+                        ->setTime(9 + ($position % 6), 10 + (($patientId + $position) % 40))
+                        ->utc()
+                        ->format('Y-m-d H:i:s'),
+                    'Note' => null,
+                ];
+            }
+        }
+
+        return $records;
+    }
+
     private function buildPatients(CarbonImmutable $beirutToday, array $doctorAssignments): array
     {
         $childOrdinals = [1, 2, 21, 22, 33, 34, 45, 46];
@@ -226,15 +322,6 @@ class DevDatasetSeeder extends Seeder
                 'MaritalStatusId' => $isChild ? null : (($index - 1) % 4) + 1,
                 'OFD' => null,
                 'MainDoctorId' => $doctorAssignments[$index],
-                'Smoker' => $isChild ? 0 : ($index % 5 === 0 ? 1 : 0),
-                'Alcoholic' => $isChild ? 0 : ($index % 7 === 0 ? 1 : 0),
-                'MedicalHistory' => $isChild
-                    ? sprintf('Child follow-up %02d', $index)
-                    : sprintf('Adult medical history note %02d', $index),
-                'SurgicalHistory' => $isChild
-                    ? sprintf('No surgeries reported %02d', $index)
-                    : sprintf('Previous procedure note %02d', $index),
-                'Allergies' => $index % 6 === 0 ? 1 : 0,
                 'Diabetic' => $isChild ? 0 : ($index % 8 === 0 ? 1 : 0),
                 'Pregnancy' => !$isChild && $index % 9 === 0 ? 1 : 0,
                 'CardiacFailure' => $isChild ? 0 : ($index % 11 === 0 ? 1 : 0),
