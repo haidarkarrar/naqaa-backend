@@ -777,7 +777,9 @@ class AdmissionController extends Controller
         }
 
         try {
-            return CarbonImmutable::parse($boundary)->utc()->format('Y-m-d H:i:s.u');
+            // Match SQL Server datetime precision so the shared filter works against the
+            // server's MEDITOP schema without emitting datetime2-style microseconds.
+            return CarbonImmutable::parse($boundary)->utc()->format('Y-m-d H:i:s.v');
         } catch (\Throwable) {
             return null;
         }
