@@ -24,6 +24,10 @@ final class PermissionCatalog
     public const ADMISSIONS_HISTORY_VIEW = 'admissions.history.view';
     public const ADMISSIONS_FORM_EDIT_ASSIGNED = 'admissions.form.edit.assigned';
     public const ADMISSIONS_FORM_EDIT_ALL = 'admissions.form.edit.all';
+    public const ADMISSIONS_FORM_VITALS_EDIT_ASSIGNED = 'admissions.form.vitals.edit.assigned';
+    public const ADMISSIONS_FORM_VITALS_EDIT_ALL = 'admissions.form.vitals.edit.all';
+    public const ADMISSIONS_FORM_CLINICAL_EDIT_ASSIGNED = 'admissions.form.clinical.edit.assigned';
+    public const ADMISSIONS_FORM_CLINICAL_EDIT_ALL = 'admissions.form.clinical.edit.all';
     public const ADMISSIONS_PATIENT_EDIT = 'admissions.patient.edit';
     public const ADMISSIONS_ATTACHMENTS_MANAGE_ASSIGNED = 'admissions.attachments.manage.assigned';
     public const ADMISSIONS_ATTACHMENTS_MANAGE_ALL = 'admissions.attachments.manage.all';
@@ -55,6 +59,10 @@ final class PermissionCatalog
             self::ADMISSIONS_HISTORY_VIEW,
             self::ADMISSIONS_FORM_EDIT_ASSIGNED,
             self::ADMISSIONS_FORM_EDIT_ALL,
+            self::ADMISSIONS_FORM_VITALS_EDIT_ASSIGNED,
+            self::ADMISSIONS_FORM_VITALS_EDIT_ALL,
+            self::ADMISSIONS_FORM_CLINICAL_EDIT_ASSIGNED,
+            self::ADMISSIONS_FORM_CLINICAL_EDIT_ALL,
             self::ADMISSIONS_PATIENT_EDIT,
             self::ADMISSIONS_ATTACHMENTS_MANAGE_ASSIGNED,
             self::ADMISSIONS_ATTACHMENTS_MANAGE_ALL,
@@ -69,7 +77,7 @@ final class PermissionCatalog
             self::ADMISSIONS_LIST_ASSIGNED,
             self::ADMISSIONS_VIEW_DETAIL_ASSIGNED,
             self::ADMISSIONS_HISTORY_VIEW,
-            self::ADMISSIONS_FORM_EDIT_ASSIGNED,
+            self::ADMISSIONS_FORM_CLINICAL_EDIT_ASSIGNED,
             self::ADMISSIONS_ATTACHMENTS_MANAGE_ASSIGNED,
         ];
     }
@@ -80,7 +88,7 @@ final class PermissionCatalog
             self::ADMISSIONS_LIST_ALL,
             self::ADMISSIONS_VIEW_DETAIL_ALL,
             self::ADMISSIONS_HISTORY_VIEW,
-            self::ADMISSIONS_FORM_EDIT_ALL,
+            self::ADMISSIONS_FORM_VITALS_EDIT_ALL,
             self::ADMISSIONS_PATIENT_EDIT,
             self::ADMISSIONS_ATTACHMENTS_MANAGE_ALL,
             self::ADMISSIONS_STATUS_UPDATE,

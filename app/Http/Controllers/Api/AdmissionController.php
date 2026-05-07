@@ -15,6 +15,7 @@ use App\Models\AdmissionFile;
 use App\Models\AdmissionStatusAudit;
 use App\Models\CheckList;
 use App\Models\CheckListItem;
+use App\Models\Doctor;
 use App\Models\DigitalAdmissionForm;
 use App\Models\Patient;
 use App\Models\PatientCheckedItem;
@@ -37,6 +38,9 @@ class AdmissionController extends Controller
     private const DEFAULT_PEN_WIDTH = 3;
     private const DEFAULT_ERASER_WIDTH = 48;
     private const LEGACY_PLACEHOLDER_DATA_URI = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+    private const FORM_SHARED_FIELDS = ['patientName', 'fileNumber', 'doctorName', 'date', 'phoneNumber'];
+    private const FORM_VITALS_FIELDS = ['TEM', 'BP', 'HR', 'SPO2', 'HEIGHT', 'WEIGHT', 'PREG', 'HC', 'TEMP', 'RR', 'MUAC', 'zScore', 'vitals'];
+    private const FORM_CLINICAL_FIELDS = ['currentMedication', 'chiefComplaint', 'physicalExam', 'management', 'diagnosisICD', 'remarks', 'stampAndSign'];
 
     public function index(Request $request): JsonResponse
     {
@@ -53,7 +57,7 @@ class AdmissionController extends Controller
         );
 
         $admissionQuery = AdmissionFile::query()
-            ->with('patient')
+            ->with(['patient', 'doctor'])
             ->tap(fn (Builder $query) => $this->applyAdmissionScope($query, $scope))
             ->tap(fn (Builder $query) => $this->applyAdmissionListFilters($query, [
                 'status' => $request->query('status'),
@@ -62,6 +66,7 @@ class AdmissionController extends Controller
                 'start_at' => $request->query('start_at'),
                 'end_before' => $request->query('end_before'),
                 'patient' => $request->query('patient'),
+                'doctor_id' => ($scope['mode'] ?? null) === 'all' ? $request->query('doctor_id') : null,
             ]))
             ->orderBy('AdmDate', 'desc');
 
@@ -93,6 +98,7 @@ class AdmissionController extends Controller
             return [
                 'id' => $admission->Id,
                 'Patient' => "{$admission->Patient?->First} {$admission->Patient?->Last}",
+                'DoctorName' => $admission->doctor?->FullName,
                 'AdmDate' => $this->serializeUtcDateTime($admission->AdmDate),
                 'Status' => $admission->Closed ? 'closed' : 'open',
                 'LegacyTump' => $legacyTump,
@@ -108,6 +114,58 @@ class AdmissionController extends Controller
                 'total' => $paginator->total(),
                 'last_page' => $paginator->lastPage(),
             ],
+        ]);
+    }
+
+    public function doctorsSearch(Request $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        if (!$user->can(PermissionCatalog::ADMISSIONS_LIST_ALL)) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $query = trim((string) $request->query('q', ''));
+        $limit = max(1, min(5, (int) $request->query('limit', 5)));
+
+        $doctors = Doctor::query()
+            ->whereExists(function ($subQuery) {
+                $subQuery
+                    ->selectRaw('1')
+                    ->from('tblWorks')
+                    ->whereColumn('tblWorks.DoctorId', 'TblDoctors.Id');
+            })
+            ->when($query !== '', function (Builder $doctorQuery) use ($query) {
+                $like = '%' . $query . '%';
+
+                $doctorQuery->where(function (Builder $innerQuery) use ($like) {
+                    $innerQuery
+                        ->where('FullName', 'like', $like)
+                        ->orWhere('FirstName', 'like', $like)
+                        ->orWhere('MiddleName', 'like', $like)
+                        ->orWhere('LastName', 'like', $like)
+                        ->orWhere('Username', 'like', $like)
+                        ->orWhere('Email', 'like', $like);
+                });
+            })
+            ->orderBy('FullName')
+            ->limit($limit)
+            ->get(['Id', 'FullName', 'Username', 'Email'])
+            ->map(fn (Doctor $doctor) => [
+                'id' => (int) $doctor->Id,
+                'FullName' => $doctor->FullName ?: trim(implode(' ', array_filter([
+                    $doctor->FirstName,
+                    $doctor->MiddleName,
+                    $doctor->LastName,
+                ]))),
+                'Username' => $doctor->Username,
+                'Email' => $doctor->Email,
+            ])
+            ->values();
+
+        return response()->json([
+            'doctors' => $doctors,
         ]);
     }
 
@@ -257,12 +315,9 @@ class AdmissionController extends Controller
         /** @var User $user */
         $user = $request->user();
 
-        $admission = $this->resolveAdmissionByPermission(
-            $user,
-            $id,
-            PermissionCatalog::ADMISSIONS_FORM_EDIT_ALL,
-            PermissionCatalog::ADMISSIONS_FORM_EDIT_ASSIGNED,
-        );
+        $admission = $this->resolveAdmissionForFormEdit($user, $id);
+        $isAssignedToUser = $this->isAdmissionAssignedToUser($user, (int) $admission->Id);
+        $formCapabilities = $this->resolveFormEditCapabilities($user, $isAssignedToUser);
 
         if ($admission->Closed) {
             return response()->json(['message' => 'Admission is closed'], 403);
@@ -272,10 +327,19 @@ class AdmissionController extends Controller
             return response()->json(['message' => 'Admission has legacy documents and cannot be edited'], 403);
         }
 
+        if (!$formCapabilities['can_edit_form']) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
         $form = DigitalAdmissionForm::firstOrNew(['AdmissionId' => $admission->Id]);
         $form->DoctorId = $user->doctor_id ?? (int) $admission->DoctorId;
         $form->UpdatedByUserId = $user->id;
-        $form->Payload = $request->Payload;
+        $form->Payload = $this->buildAuthorizedFormPayload(
+            (array) ($request->Payload ?? []),
+            is_array($form->Payload) ? $form->Payload : [],
+            $formCapabilities['can_edit_vitals_form'],
+            $formCapabilities['can_edit_clinical_form'],
+        );
         $form->Strokes = $this->sanitizeStrokes($request->Strokes ?? []);
         $form->FormVersion = $request->FormVersion ?? 'v1';
         $form->Status = $request->Status ?? 'draft';
@@ -723,6 +787,22 @@ class AdmissionController extends Controller
         return $query->firstOrFail();
     }
 
+    private function resolveAdmissionForFormEdit(User $user, int $admissionId): AdmissionFile
+    {
+        if ($this->hasAnyFormEditAllPermission($user)) {
+            return AdmissionFile::query()->where('Id', $admissionId)->firstOrFail();
+        }
+
+        if ($this->hasAnyFormEditAssignedPermission($user)) {
+            return AdmissionFile::query()
+                ->where('Id', $admissionId)
+                ->assignedToDoctorViaWorks($this->requireLinkedDoctorId($user))
+                ->firstOrFail();
+        }
+
+        abort(403, 'Forbidden');
+    }
+
     private function applyAdmissionScope(Builder $query, array $scope): Builder
     {
         if (($scope['mode'] ?? null) === 'all') {
@@ -764,6 +844,11 @@ class AdmissionController extends Controller
                         ->orWhere('Phone', 'like', $like);
                 });
             });
+        }
+
+        $doctorId = (int) ($filters['doctor_id'] ?? 0);
+        if ($doctorId > 0) {
+            $query->assignedToDoctorViaWorks($doctorId);
         }
 
         return $query;
@@ -1102,6 +1187,79 @@ class AdmissionController extends Controller
         return TblDocument::query()->where('AdmNb', $admissionId)->exists();
     }
 
+    private function hasAnyFormEditAllPermission(User $user): bool
+    {
+        return $user->can(PermissionCatalog::ADMISSIONS_FORM_EDIT_ALL)
+            || $user->can(PermissionCatalog::ADMISSIONS_FORM_VITALS_EDIT_ALL)
+            || $user->can(PermissionCatalog::ADMISSIONS_FORM_CLINICAL_EDIT_ALL);
+    }
+
+    private function hasAnyFormEditAssignedPermission(User $user): bool
+    {
+        return $user->can(PermissionCatalog::ADMISSIONS_FORM_EDIT_ASSIGNED)
+            || $user->can(PermissionCatalog::ADMISSIONS_FORM_VITALS_EDIT_ASSIGNED)
+            || $user->can(PermissionCatalog::ADMISSIONS_FORM_CLINICAL_EDIT_ASSIGNED);
+    }
+
+    private function resolveFormEditCapabilities(User $user, bool $isAssignedToUser): array
+    {
+        $canEditVitalsForm = $user->can(PermissionCatalog::ADMISSIONS_FORM_EDIT_ALL)
+            || $user->can(PermissionCatalog::ADMISSIONS_FORM_VITALS_EDIT_ALL)
+            || (
+                $isAssignedToUser
+                && (
+                    $user->can(PermissionCatalog::ADMISSIONS_FORM_EDIT_ASSIGNED)
+                    || $user->can(PermissionCatalog::ADMISSIONS_FORM_VITALS_EDIT_ASSIGNED)
+                )
+            );
+
+        $canEditClinicalForm = $user->can(PermissionCatalog::ADMISSIONS_FORM_EDIT_ALL)
+            || $user->can(PermissionCatalog::ADMISSIONS_FORM_CLINICAL_EDIT_ALL)
+            || (
+                $isAssignedToUser
+                && (
+                    $user->can(PermissionCatalog::ADMISSIONS_FORM_EDIT_ASSIGNED)
+                    || $user->can(PermissionCatalog::ADMISSIONS_FORM_CLINICAL_EDIT_ASSIGNED)
+                )
+            );
+
+        return [
+            'can_edit_vitals_form' => $canEditVitalsForm,
+            'can_edit_clinical_form' => $canEditClinicalForm,
+            'can_edit_form' => $canEditVitalsForm || $canEditClinicalForm,
+        ];
+    }
+
+    private function buildAuthorizedFormPayload(
+        array $incomingPayload,
+        array $existingPayload,
+        bool $canEditVitalsForm,
+        bool $canEditClinicalForm
+    ): array {
+        $allowedKeys = self::FORM_SHARED_FIELDS;
+
+        if ($canEditVitalsForm) {
+            $allowedKeys = [...$allowedKeys, ...self::FORM_VITALS_FIELDS];
+        }
+
+        if ($canEditClinicalForm) {
+            $allowedKeys = [...$allowedKeys, ...self::FORM_CLINICAL_FIELDS];
+        }
+
+        $allowedLookup = array_fill_keys(array_values(array_unique($allowedKeys)), true);
+        $nextPayload = $existingPayload;
+
+        foreach ($incomingPayload as $key => $value) {
+            if (!is_string($key) || !isset($allowedLookup[$key])) {
+                continue;
+            }
+
+            $nextPayload[$key] = is_scalar($value) || $value === null ? $value : (string) $value;
+        }
+
+        return $nextPayload;
+    }
+
     private function buildAdmissionActions(
         User $user,
         bool $isAssignedToUser,
@@ -1111,12 +1269,10 @@ class AdmissionController extends Controller
         $canView = $user->can(PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ALL)
             || ($user->can(PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ASSIGNED) && $isAssignedToUser);
 
-        $canEditForm = !$isClosed
-            && !$hasLegacyDocuments
-            && (
-                $user->can(PermissionCatalog::ADMISSIONS_FORM_EDIT_ALL)
-                || ($user->can(PermissionCatalog::ADMISSIONS_FORM_EDIT_ASSIGNED) && $isAssignedToUser)
-            );
+        $formCapabilities = $this->resolveFormEditCapabilities($user, $isAssignedToUser);
+        $canEditVitalsForm = !$isClosed && !$hasLegacyDocuments && $formCapabilities['can_edit_vitals_form'];
+        $canEditClinicalForm = !$isClosed && !$hasLegacyDocuments && $formCapabilities['can_edit_clinical_form'];
+        $canEditForm = $canEditVitalsForm || $canEditClinicalForm;
 
         $canManageAttachments = !$isClosed
             && !$hasLegacyDocuments
@@ -1138,6 +1294,8 @@ class AdmissionController extends Controller
         return [
             'canView' => $canView,
             'canEditForm' => $canEditForm,
+            'canEditVitalsForm' => $canEditVitalsForm,
+            'canEditClinicalForm' => $canEditClinicalForm,
             'canEditPatientInfo' => $canEditPatientInfo,
             'canManageAttachments' => $canManageAttachments,
             'canChangeStatus' => $canChangeStatus,

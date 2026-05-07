@@ -21,6 +21,7 @@ Route::middleware([AuthenticateApiUser::class])->group(function () {
     Route::get('auth/me', [AuthController::class, 'me']);
 
     Route::get('admissions', [AdmissionController::class, 'index']);
+    Route::get('admissions/doctors/search', [AdmissionController::class, 'doctorsSearch']);
     Route::get('admissions/{id}', [AdmissionController::class, 'show']);
     Route::patch('admissions/{id}/patient', [AdmissionController::class, 'updatePatient']);
     Route::post('admissions/{id}/form', [AdmissionController::class, 'saveForm']);
