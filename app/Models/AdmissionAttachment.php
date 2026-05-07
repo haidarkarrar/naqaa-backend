@@ -10,6 +10,8 @@ class AdmissionAttachment extends Model
     protected $connection = 'naqaa';
     protected $table = 'TblAdmissionAttachments';
     protected $primaryKey = 'Id';
+    public $incrementing = true;
+    protected $keyType = 'int';
 
     protected $casts = [
         'Id' => 'integer',

@@ -14,12 +14,12 @@ return new class extends Migration
 
         Schema::connection('naqaa')->create('TblAdmissionAttachments', function (Blueprint $table) {
             $table->increments('Id');
-            $table->unsignedBigInteger('DoctorId');
+            $table->unsignedBigInteger('DoctorId')->nullable();
             $table->unsignedBigInteger('AdmissionId');
             $table->string('Path');
-            $table->string('Mime', 64)->nullable();
+            $table->string('Mime', 64);
             $table->string('Label')->nullable();
-            $table->dateTime('UploadedAt')->nullable();
+            $table->dateTime('UploadedAt');
             $table->timestamps();
         });
     }
