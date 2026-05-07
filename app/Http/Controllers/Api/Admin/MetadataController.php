@@ -16,12 +16,34 @@ class MetadataController extends Controller
             abort(403, 'Forbidden');
         }
 
-        $permissions = Permission::query()
-            ->orderBy('name')
-            ->pluck('name')
-            ->values();
+        $query = Permission::query()
+            ->when($request->query('q'), function ($builder, $value) {
+                $search = trim((string) $value);
+                if ($search === '') {
+                    return $builder;
+                }
 
-        return response()->json(['permissions' => $permissions]);
+                return $builder->where('name', 'like', '%' . $search . '%');
+            })
+            ->orderBy('name')
+            ;
+
+        $permissions = $query->paginate(
+            max(1, min(100, (int) $request->query('per_page', 20))),
+            ['*'],
+            'page',
+            max(1, (int) $request->query('page', 1))
+        );
+
+        return response()->json([
+            'permissions' => collect($permissions->items())->pluck('name')->values(),
+            'pagination' => [
+                'page' => $permissions->currentPage(),
+                'per_page' => $permissions->perPage(),
+                'total' => $permissions->total(),
+                'last_page' => $permissions->lastPage(),
+            ],
+        ]);
     }
 
     public function doctorsSearch(Request $request): JsonResponse
@@ -74,4 +96,3 @@ class MetadataController extends Controller
         return response()->json(['doctors' => $doctors]);
     }
 }
-

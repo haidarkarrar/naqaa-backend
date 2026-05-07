@@ -2,16 +2,22 @@
 
 namespace App\Http\Controllers\Api;
 
+use Carbon\CarbonImmutable;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\BatchUpdateAdmissionStatusRequest;
 use App\Http\Requests\Api\PreviewBatchAdmissionStatusRequest;
 use App\Http\Requests\Api\SaveDigitalFormRequest;
+use App\Http\Requests\Api\UpdateAdmissionPatientRequest;
 use App\Http\Requests\Api\UpdateAdmissionStatusRequest;
 use App\Http\Requests\Api\UploadAttachmentRequest;
 use App\Models\AdmissionAttachment;
 use App\Models\AdmissionFile;
 use App\Models\AdmissionStatusAudit;
+use App\Models\CheckList;
+use App\Models\CheckListItem;
 use App\Models\DigitalAdmissionForm;
+use App\Models\Patient;
+use App\Models\PatientCheckedItem;
 use App\Models\TblDocument;
 use App\Models\User;
 use App\Support\PermissionCatalog;
@@ -20,6 +26,7 @@ use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -52,6 +59,8 @@ class AdmissionController extends Controller
                 'status' => $request->query('status'),
                 'start_date' => $request->query('start_date'),
                 'end_date' => $request->query('end_date'),
+                'start_at' => $request->query('start_at'),
+                'end_before' => $request->query('end_before'),
                 'patient' => $request->query('patient'),
             ]))
             ->orderBy('AdmDate', 'desc');
@@ -84,7 +93,7 @@ class AdmissionController extends Controller
             return [
                 'id' => $admission->Id,
                 'Patient' => "{$admission->Patient?->First} {$admission->Patient?->Last}",
-                'AdmDate' => optional($admission->AdmDate)->toDateTimeString(),
+                'AdmDate' => $this->serializeUtcDateTime($admission->AdmDate),
                 'Status' => $admission->Closed ? 'closed' : 'open',
                 'LegacyTump' => $legacyTump,
                 ...$actions,
@@ -149,7 +158,7 @@ class AdmissionController extends Controller
                         'Path' => $attachment->Path,
                         'Url' => Storage::url($attachment->Path),
                         'Label' => $attachment->Label,
-                        'UploadedAt' => optional($attachment->UploadedAt)->toDateTimeString(),
+                        'UploadedAt' => $this->serializeUtcDateTime($attachment->UploadedAt),
                     ];
                 });
 
@@ -160,9 +169,12 @@ class AdmissionController extends Controller
                 !empty($legacyDocumentsForAdmission),
             );
 
+            $patient = $admission->patient ?? $admission->Patient;
+
             return response()->json([
-                'Admission' => $admission,
-                'Patient' => $admission->Patient,
+                'Admission' => $this->serializeAdmission($admission),
+                'Patient' => $this->serializePatient($patient),
+                'Checklists' => $patient ? $this->buildChecklistPayload((int) $patient->Id) : [],
                 'History' => $history,
                 'DigitalForm' => $admission->DigitalForm,
                 'LegacyDocuments' => $legacyDocumentsForAdmission,
@@ -180,6 +192,64 @@ class AdmissionController extends Controller
             ]);
             throw $e;
         }
+    }
+
+    public function updatePatient(int $id, UpdateAdmissionPatientRequest $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        if (!$user->can(PermissionCatalog::ADMISSIONS_PATIENT_EDIT)) {
+            return response()->json(['message' => 'Forbidden'], 403);
+        }
+
+        $admission = $this->resolveAdmissionByPermission(
+            $user,
+            $id,
+            PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ALL,
+            PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ASSIGNED,
+            ['patient']
+        );
+
+        /** @var Patient|null $patient */
+        $patient = $admission->patient;
+        if (!$patient) {
+            return response()->json(['message' => 'Patient not found'], 404);
+        }
+
+        $validated = $request->validated();
+        $hasChecklistItemIds = array_key_exists('ChecklistItemIds', $validated);
+        $checklistItemIds = collect($validated['ChecklistItemIds'] ?? [])
+            ->map(fn ($itemId) => (int) $itemId)
+            ->unique()
+            ->values()
+            ->all();
+        unset($validated['ChecklistItemIds']);
+
+        if (array_key_exists('DOB', $validated) && $validated['DOB']) {
+            $validated['DOB'] = CarbonImmutable::parse($validated['DOB'])->toDateString();
+        }
+
+        /** @var Patient $freshPatient */
+        $freshPatient = DB::connection('meditop')->transaction(function () use ($patient, $validated, $hasChecklistItemIds, $checklistItemIds) {
+            $patient->fill($validated);
+            $patient->save();
+
+            if ($hasChecklistItemIds) {
+                $this->syncPatientChecklistSelections((int) $patient->Id, $checklistItemIds);
+            }
+
+            /** @var Patient $refreshed */
+            $refreshed = $patient->fresh();
+
+            return $refreshed;
+        });
+
+        return response()->json([
+            'message' => 'Patient info updated',
+            'patient' => $this->serializePatient($freshPatient),
+            'Checklists' => $this->buildChecklistPayload((int) $freshPatient->Id),
+        ]);
     }
 
     public function saveForm(int $id, SaveDigitalFormRequest $request): JsonResponse
@@ -269,7 +339,7 @@ class AdmissionController extends Controller
                     'Path' => $attachment->Path,
                     'Url' => Storage::url($attachment->Path),
                     'Label' => $attachment->Label,
-                    'UploadedAt' => optional($attachment->UploadedAt)->toDateTimeString(),
+                    'UploadedAt' => $this->serializeUtcDateTime($attachment->UploadedAt),
                 ],
             ]);
         } catch (\Throwable $error) {
@@ -374,7 +444,13 @@ class AdmissionController extends Controller
         $admissionIds = $mode === 'selected'
             ? collect($validated['admission_ids'] ?? [])->map(fn ($id) => (int) $id)->unique()->values()->all()
             : [];
-        $filters = $mode === 'filtered' ? ($validated['filters'] ?? []) : [];
+        $scopeType = $mode === 'scope' ? (string) ($validated['scope_type'] ?? 'all') : null;
+        $scopeFilters = $scopeType === 'date_range'
+            ? [
+                'start_at' => $validated['start_at'] ?? null,
+                'end_before' => $validated['end_before'] ?? null,
+            ]
+            : [];
 
         $scope = $this->resolveScopeForPermissions(
             $user,
@@ -387,7 +463,8 @@ class AdmissionController extends Controller
             $mode,
             $targetClosed,
             $admissionIds,
-            $filters,
+            $scopeType,
+            $scopeFilters,
         );
 
         return response()->json([
@@ -397,7 +474,7 @@ class AdmissionController extends Controller
             'will_change_count' => $counts['will_change_count'],
             'already_target_count' => $counts['already_target_count'],
             'inaccessible_count' => $counts['inaccessible_count'],
-            'selection_summary' => $this->buildBatchSelectionSummary($mode, $admissionIds, $filters),
+            'selection_summary' => $this->buildBatchSelectionSummary($mode, $admissionIds, $scopeType, $scopeFilters),
         ]);
     }
 
@@ -417,7 +494,13 @@ class AdmissionController extends Controller
         $admissionIds = $mode === 'selected'
             ? collect($validated['admission_ids'] ?? [])->map(fn ($id) => (int) $id)->unique()->values()->all()
             : [];
-        $filters = $mode === 'filtered' ? ($validated['filters'] ?? []) : [];
+        $scopeType = $mode === 'scope' ? (string) ($validated['scope_type'] ?? 'all') : null;
+        $scopeFilters = $scopeType === 'date_range'
+            ? [
+                'start_at' => $validated['start_at'] ?? null,
+                'end_before' => $validated['end_before'] ?? null,
+            ]
+            : [];
 
         $scope = $this->resolveScopeForPermissions(
             $user,
@@ -430,7 +513,8 @@ class AdmissionController extends Controller
             $mode,
             $targetClosed,
             $admissionIds,
-            $filters,
+            $scopeType,
+            $scopeFilters,
         );
 
         if ((int) $validated['expected_will_change_count'] !== $counts['will_change_count']) {
@@ -452,7 +536,8 @@ class AdmissionController extends Controller
             $mode,
             $targetClosed,
             $admissionIds,
-            $filters,
+            $scopeType,
+            $scopeFilters,
             (int) $user->id,
             $validated['notes'] ?? null,
         );
@@ -565,7 +650,7 @@ class AdmissionController extends Controller
                 'id' => $record->Id,
                 'admissionNumber' => (int) $record->Id,
                 'historyType' => 'admission',
-                'admDate' => optional($record->AdmDate)->toDateTimeString(),
+                'admDate' => $this->serializeUtcDateTime($record->AdmDate),
                 'status' => $record->Closed ? 'closed' : 'open',
                 'doctorId' => $record->DoctorId,
                 'doctorName' => optional($record->doctor)->FullName,
@@ -587,7 +672,7 @@ class AdmissionController extends Controller
                     'id' => null,
                     'admissionNumber' => $doc->AdmNb !== null ? (int) $doc->AdmNb : null,
                     'historyType' => 'legacy',
-                    'admDate' => optional($doc->Date)->toDateTimeString(),
+                    'admDate' => $this->serializeUtcDateTime($doc->Date),
                     'status' => 'legacy',
                     'doctorId' => null,
                     'doctorName' => null,
@@ -649,14 +734,14 @@ class AdmissionController extends Controller
 
     private function applyAdmissionListFilters(Builder $query, array $filters): Builder
     {
-        $startDate = isset($filters['start_date']) ? trim((string) $filters['start_date']) : '';
-        if ($startDate !== '') {
-            $query->where('AdmDate', '>=', $startDate);
+        $startAt = $this->normalizeUtcFilterBoundary($filters['start_at'] ?? null);
+        if ($startAt !== null) {
+            $query->where('AdmDate', '>=', $startAt);
         }
 
-        $endDate = isset($filters['end_date']) ? trim((string) $filters['end_date']) : '';
-        if ($endDate !== '') {
-            $query->where('AdmDate', '<=', $endDate);
+        $endBefore = $this->normalizeUtcFilterBoundary($filters['end_before'] ?? null);
+        if ($endBefore !== null) {
+            $query->where('AdmDate', '<', $endBefore);
         }
 
         $status = isset($filters['status']) ? strtolower(trim((string) $filters['status'])) : '';
@@ -684,6 +769,154 @@ class AdmissionController extends Controller
         return $query;
     }
 
+    private function normalizeUtcFilterBoundary(mixed $value): ?string
+    {
+        $boundary = trim((string) $value);
+        if ($boundary === '') {
+            return null;
+        }
+
+        try {
+            // Match SQL Server datetime precision so the shared filter works against the
+            // server's MEDITOP schema without emitting datetime2-style microseconds.
+            return CarbonImmutable::parse($boundary)->utc()->format('Y-m-d H:i:s.v');
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function serializeAdmission(AdmissionFile $admission): array
+    {
+        $payload = $admission->attributesToArray();
+        $payload['AdmDate'] = $this->serializeUtcDateTime($admission->AdmDate);
+
+        return $payload;
+    }
+
+    private function serializePatient(?Patient $patient): ?array
+    {
+        if (!$patient) {
+            return null;
+        }
+
+        return $patient->attributesToArray();
+    }
+
+    private function buildChecklistPayload(int $patientId): array
+    {
+        $checklists = CheckList::query()
+            ->with(['items' => fn ($query) => $query->orderBy('Id')])
+            ->orderBy('Id')
+            ->get();
+
+        if ($checklists->isEmpty()) {
+            return [];
+        }
+
+        $checkedItemLookup = PatientCheckedItem::query()
+            ->where('PatientId', $patientId)
+            ->pluck('ItemId')
+            ->mapWithKeys(fn ($itemId) => [(int) $itemId => true])
+            ->all();
+
+        return $checklists
+            ->map(function (CheckList $checklist) use ($checkedItemLookup) {
+                $checkedItems = $checklist->items
+                    ->filter(fn (CheckListItem $item) => isset($checkedItemLookup[(int) $item->Id]))
+                    ->values();
+
+                return [
+                    'Id' => (int) $checklist->Id,
+                    'Name' => $checklist->Name,
+                    'Items' => $checklist->items
+                        ->map(fn (CheckListItem $item) => [
+                            'Id' => (int) $item->Id,
+                            'Name' => $item->Name,
+                        ])
+                        ->values()
+                        ->all(),
+                    'CheckedItemIds' => $checkedItems
+                        ->pluck('Id')
+                        ->map(fn ($itemId) => (int) $itemId)
+                        ->values()
+                        ->all(),
+                    'CheckedItemNames' => $checkedItems
+                        ->pluck('Name')
+                        ->filter(fn ($name) => is_string($name) && $name !== '')
+                        ->values()
+                        ->all(),
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    private function syncPatientChecklistSelections(int $patientId, array $selectedItemIds): void
+    {
+        $selectedIds = collect($selectedItemIds)
+            ->map(fn ($itemId) => (int) $itemId)
+            ->unique()
+            ->values()
+            ->all();
+        $selectedLookup = array_fill_keys($selectedIds, true);
+
+        $currentRows = PatientCheckedItem::query()
+            ->where('PatientId', $patientId)
+            ->orderBy('Id')
+            ->get(['Id', 'ItemId']);
+
+        $rowIdsToDelete = [];
+        $existingSelectedIds = [];
+
+        foreach ($currentRows->groupBy(fn (PatientCheckedItem $row) => (int) $row->ItemId) as $itemId => $rowsForItem) {
+            $numericItemId = (int) $itemId;
+            if (!isset($selectedLookup[$numericItemId])) {
+                foreach ($rowsForItem as $row) {
+                    $rowIdsToDelete[] = (int) $row->Id;
+                }
+                continue;
+            }
+
+            $existingSelectedIds[] = $numericItemId;
+
+            foreach ($rowsForItem->slice(1) as $duplicateRow) {
+                $rowIdsToDelete[] = (int) $duplicateRow->Id;
+            }
+        }
+
+        if (!empty($rowIdsToDelete)) {
+            PatientCheckedItem::query()->whereIn('Id', $rowIdsToDelete)->delete();
+        }
+
+        $itemIdsToInsert = array_values(array_diff($selectedIds, array_unique($existingSelectedIds)));
+        if (empty($itemIdsToInsert)) {
+            return;
+        }
+
+        $now = now();
+        $rowsToInsert = array_map(fn (int $itemId) => [
+            'PatientId' => $patientId,
+            'ItemId' => $itemId,
+            'Date' => $now,
+            'Note' => null,
+        ], $itemIdsToInsert);
+
+        PatientCheckedItem::query()->insert($rowsToInsert);
+    }
+
+    private function serializeUtcDateTime(mixed $value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        try {
+            return CarbonImmutable::parse($value)->utc()->format('Y-m-d\TH:i:s\Z');
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
     private function canBatchUpdateStatus(User $user): bool
     {
         return $user->can(PermissionCatalog::ADMISSIONS_STATUS_UPDATE)
@@ -694,7 +927,8 @@ class AdmissionController extends Controller
         array $scope,
         string $mode,
         array $admissionIds,
-        array $filters
+        ?string $scopeType,
+        array $scopeFilters
     ): Builder {
         $query = AdmissionFile::query()
             ->tap(fn (Builder $builder) => $this->applyAdmissionScope($builder, $scope));
@@ -707,7 +941,11 @@ class AdmissionController extends Controller
             return $query->whereIn('Id', $admissionIds);
         }
 
-        return $this->applyAdmissionListFilters($query, $filters);
+        if ($scopeType === 'date_range') {
+            return $this->applyAdmissionListFilters($query, $scopeFilters);
+        }
+
+        return $query;
     }
 
     private function computeBatchStatusCounts(
@@ -715,9 +953,10 @@ class AdmissionController extends Controller
         string $mode,
         bool $targetClosed,
         array $admissionIds,
-        array $filters
+        ?string $scopeType,
+        array $scopeFilters
     ): array {
-        $baseQuery = $this->buildBatchStatusBaseQuery($scope, $mode, $admissionIds, $filters);
+        $baseQuery = $this->buildBatchStatusBaseQuery($scope, $mode, $admissionIds, $scopeType, $scopeFilters);
 
         $matchedCount = (clone $baseQuery)->count();
         $willChangeCount = (clone $baseQuery)->where('Closed', $targetClosed ? 0 : 1)->count();
@@ -737,7 +976,8 @@ class AdmissionController extends Controller
         string $mode,
         bool $targetClosed,
         array $admissionIds,
-        array $filters,
+        ?string $scopeType,
+        array $scopeFilters,
         int $userId,
         ?string $notes
     ): array {
@@ -745,7 +985,7 @@ class AdmissionController extends Controller
         $auditsCreated = 0;
         $targetValue = $targetClosed ? 1 : 0;
 
-        $this->buildBatchStatusBaseQuery($scope, $mode, $admissionIds, $filters)
+        $this->buildBatchStatusBaseQuery($scope, $mode, $admissionIds, $scopeType, $scopeFilters)
             ->where('Closed', $targetClosed ? 0 : 1)
             ->orderBy('Id')
             ->chunkById(200, function (EloquentCollection $chunk) use (
@@ -797,7 +1037,7 @@ class AdmissionController extends Controller
         return [$updatedCount, $auditsCreated];
     }
 
-    private function buildBatchSelectionSummary(string $mode, array $admissionIds, array $filters): string
+    private function buildBatchSelectionSummary(string $mode, array $admissionIds, ?string $scopeType, array $scopeFilters): string
     {
         if ($mode === 'selected') {
             $count = count($admissionIds);
@@ -806,33 +1046,18 @@ class AdmissionController extends Controller
                 : sprintf('Selected scope: %d admissions.', $count);
         }
 
-        $parts = [];
-
-        $status = isset($filters['status']) ? strtolower(trim((string) $filters['status'])) : '';
-        if ($status !== '') {
-            $parts[] = "status = {$status}";
+        if ($scopeType === 'all') {
+            return 'Scope: all accessible admissions.';
         }
 
-        $startDate = isset($filters['start_date']) ? trim((string) $filters['start_date']) : '';
-        if ($startDate !== '') {
-            $parts[] = "start date >= {$startDate}";
+        $startAt = $this->normalizeUtcFilterBoundary($scopeFilters['start_at'] ?? null);
+        $endBefore = $this->normalizeUtcFilterBoundary($scopeFilters['end_before'] ?? null);
+
+        if ($startAt !== null && $endBefore !== null) {
+            return sprintf('Scope: admissions from %s up to %s (UTC).', $startAt, $endBefore);
         }
 
-        $endDate = isset($filters['end_date']) ? trim((string) $filters['end_date']) : '';
-        if ($endDate !== '') {
-            $parts[] = "end date <= {$endDate}";
-        }
-
-        $patient = isset($filters['patient']) ? trim((string) $filters['patient']) : '';
-        if ($patient !== '') {
-            $parts[] = "patient contains \"{$patient}\"";
-        }
-
-        if (empty($parts)) {
-            return 'Filtered scope: all accessible admissions (no extra filters).';
-        }
-
-        return 'Filtered scope: ' . implode(', ', $parts) . '.';
+        return 'Scope: accessible admissions in the selected date range.';
     }
 
     private function buildAssignedLookupForUser(User $user, Collection $admissionIds): array
@@ -900,6 +1125,8 @@ class AdmissionController extends Controller
                 || ($user->can(PermissionCatalog::ADMISSIONS_ATTACHMENTS_MANAGE_ASSIGNED) && $isAssignedToUser)
             );
 
+        $canEditPatientInfo = $user->can(PermissionCatalog::ADMISSIONS_PATIENT_EDIT) && $canView;
+
         $canChangeStatus = $user->can(PermissionCatalog::ADMISSIONS_STATUS_UPDATE)
             && (
                 $user->can(PermissionCatalog::ADMISSIONS_VIEW_DETAIL_ALL)
@@ -911,6 +1138,7 @@ class AdmissionController extends Controller
         return [
             'canView' => $canView,
             'canEditForm' => $canEditForm,
+            'canEditPatientInfo' => $canEditPatientInfo,
             'canManageAttachments' => $canManageAttachments,
             'canChangeStatus' => $canChangeStatus,
             'canViewHistory' => $canViewHistory,

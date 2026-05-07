@@ -16,13 +16,35 @@ class RoleController extends Controller
     {
         $this->authorizePermission($request, PermissionCatalog::ROLES_VIEW);
 
-        $roles = Role::query()
+        $query = Role::query()
             ->with('permissions')
-            ->orderBy('name')
-            ->get()
-            ->map(fn (Role $role) => $this->serializeRole($role));
+            ->when($request->query('q'), function ($builder, $value) {
+                $search = trim((string) $value);
+                if ($search === '') {
+                    return $builder;
+                }
 
-        return response()->json(['roles' => $roles]);
+                return $builder->where('name', 'like', '%' . $search . '%');
+            })
+            ->orderBy('name')
+            ;
+
+        $roles = $query->paginate(
+            max(1, min(100, (int) $request->query('per_page', 20))),
+            ['*'],
+            'page',
+            max(1, (int) $request->query('page', 1))
+        );
+
+        return response()->json([
+            'roles' => collect($roles->items())->map(fn (Role $role) => $this->serializeRole($role))->values(),
+            'pagination' => [
+                'page' => $roles->currentPage(),
+                'per_page' => $roles->perPage(),
+                'total' => $roles->total(),
+                'last_page' => $roles->lastPage(),
+            ],
+        ]);
     }
 
     public function store(Request $request): JsonResponse
@@ -125,4 +147,3 @@ class RoleController extends Controller
         ];
     }
 }
-

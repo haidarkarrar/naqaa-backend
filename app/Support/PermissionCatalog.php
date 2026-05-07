@@ -24,6 +24,7 @@ final class PermissionCatalog
     public const ADMISSIONS_HISTORY_VIEW = 'admissions.history.view';
     public const ADMISSIONS_FORM_EDIT_ASSIGNED = 'admissions.form.edit.assigned';
     public const ADMISSIONS_FORM_EDIT_ALL = 'admissions.form.edit.all';
+    public const ADMISSIONS_PATIENT_EDIT = 'admissions.patient.edit';
     public const ADMISSIONS_ATTACHMENTS_MANAGE_ASSIGNED = 'admissions.attachments.manage.assigned';
     public const ADMISSIONS_ATTACHMENTS_MANAGE_ALL = 'admissions.attachments.manage.all';
     public const ADMISSIONS_STATUS_UPDATE = 'admissions.status.update';
@@ -54,6 +55,7 @@ final class PermissionCatalog
             self::ADMISSIONS_HISTORY_VIEW,
             self::ADMISSIONS_FORM_EDIT_ASSIGNED,
             self::ADMISSIONS_FORM_EDIT_ALL,
+            self::ADMISSIONS_PATIENT_EDIT,
             self::ADMISSIONS_ATTACHMENTS_MANAGE_ASSIGNED,
             self::ADMISSIONS_ATTACHMENTS_MANAGE_ALL,
             self::ADMISSIONS_STATUS_UPDATE,
@@ -79,6 +81,7 @@ final class PermissionCatalog
             self::ADMISSIONS_VIEW_DETAIL_ALL,
             self::ADMISSIONS_HISTORY_VIEW,
             self::ADMISSIONS_FORM_EDIT_ALL,
+            self::ADMISSIONS_PATIENT_EDIT,
             self::ADMISSIONS_ATTACHMENTS_MANAGE_ALL,
             self::ADMISSIONS_STATUS_UPDATE,
             self::ADMISSIONS_STATUS_UPDATE_BATCH,

@@ -13,6 +13,7 @@ class AdmissionFile extends Model
     protected $connection = 'meditop';
     protected $table = 'TblAdmFiles';
     protected $primaryKey = 'Id';
+    public $timestamps = false;
 
     protected $casts = [
         'AdmDate' => 'datetime',

@@ -10,6 +10,7 @@ class Patient extends Model
     protected $connection = 'meditop';
     protected $table = 'TblPatients';
     protected $primaryKey = 'Id';
+    public $timestamps = false;
     
     protected $fillable = [
         'First',
@@ -35,10 +36,11 @@ class Patient extends Model
         'MaritalStatusId',
         'OFD',
         'MainDoctorId',
-        'Smoker',
-        'Alcoholic',
-        'MedicalHistory',
-        'SurgicalHistory',
+        'Diabetic',
+        'Pregnancy',
+        'CardiacFailure',
+        'RenalFailure',
+        'OtherDisease',
     ];
 
     protected $casts = [
@@ -46,10 +48,20 @@ class Patient extends Model
         'GenderId' => 'integer',
         'MainDoctorId' => 'integer',
         'GuarantorId' => 'integer',
+        'Diabetic' => 'boolean',
+        'Pregnancy' => 'boolean',
+        'CardiacFailure' => 'boolean',
+        'RenalFailure' => 'boolean',
+        'OtherDisease' => 'boolean',
     ];
 
     public function admissions(): HasMany
     {
         return $this->hasMany(AdmissionFile::class, 'PatientId', 'Id');
+    }
+
+    public function checkedItems(): HasMany
+    {
+        return $this->hasMany(PatientCheckedItem::class, 'PatientId', 'Id');
     }
 }

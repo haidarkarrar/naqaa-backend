@@ -15,6 +15,7 @@ class Doctor extends Model
     protected $connection = 'meditop';
     protected $table = 'TblDoctors';
     protected $primaryKey = 'Id';
+    public $timestamps = false;
     
     protected $fillable = [
         'FirstName',
